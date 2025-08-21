@@ -18,13 +18,13 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(auth.router)
+app.include_router(auth.router, prefix="/api")
 
-@app.get("/")
+@app.get("/api/")
 async def root():
     return {"message": "Welcome to Pulse API with Authentication"}
 
-@app.get("/health")
+@app.get("/api/health")
 async def health_check():
     return {"status": "healthy"}
 
