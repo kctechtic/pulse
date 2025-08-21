@@ -3,9 +3,9 @@ from typing import Optional
 from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from config import settings
-from database import get_supabase, verify_password, get_password_hash
-from models import TokenData
+from .config import settings
+from .database import get_supabase, verify_password, get_password_hash
+from .models import TokenData
 
 security = HTTPBearer()
 
