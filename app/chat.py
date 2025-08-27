@@ -67,7 +67,11 @@ def call_openai(user_message: str, tools, session_id: str, user_id: str):
                 f"For example: 'last two weeks' should be from 2 weeks ago to {current_date_str}, using {current_year}. "
                 f"Current date context: The user wants recent, current data from {current_year}. "
                 f"If you see 'last week', 'past week', 'recent', etc., always use dates from {current_year} and recent past. "
-                f"Remember: 'last two weeks' means the most recent 2 weeks ending on {current_date_str}, not some arbitrary period from {current_year-1}."
+                f"Remember: 'last two weeks' means the most recent 2 weeks ending on {current_date_str}, not some arbitrary period from {current_year-1}. "
+                f"RESPONSE FORMATTING: Format your responses naturally and clearly, just like ChatGPT does. "
+                f"Use **bold** for important numbers and key findings when it makes sense. "
+                f"Present data in a readable way that's easy to understand. "
+                f"Structure your response logically with clear sections and proper spacing."
             )
         }
 
@@ -167,6 +171,9 @@ def handle_tool_calls(tool_calls, session_id, messages):
         final_answer = final_response.choices[0].message.content
         if not final_answer:
             final_answer = "I've processed your request using the available tools. Is there anything specific you'd like to know about the results?"
+        
+        # Ensure the response is well-formatted for UI display
+        final_answer = enhance_response_formatting(final_answer)
 
         save_message(session_id, "assistant", final_answer)
         return final_answer
@@ -247,3 +254,114 @@ def get_history(session_id: str) -> list:
     except Exception as e:
         print(f"Error getting history: {e}")
         return []
+
+def get_user_chat_sessions(user_id: str) -> list:
+    """Get all chat sessions for a user with basic info"""
+    try:
+        supabase = get_supabase()
+        
+        # Get chat sessions (only using existing columns)
+        sessions = (
+            supabase.table("chat_sessions")
+            .select("id, title, created_at")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .execute()
+            .data
+        )
+        
+        # Get message count for each session
+        for session in sessions:
+            message_count = (
+                supabase.table("chat_messages")
+                .select("id", count="exact")
+                .eq("session_id", session["id"])
+                .execute()
+                .count
+            )
+            session["message_count"] = message_count or 0
+            
+            # Get last message preview
+            last_message = (
+                supabase.table("chat_messages")
+                .select("content, created_at")
+                .eq("session_id", session["id"])
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+                .data
+            )
+            
+            if last_message:
+                session["last_message"] = last_message[0]["content"][:100] + "..." if len(last_message[0]["content"]) > 100 else last_message[0]["content"]
+                session["last_message_time"] = last_message[0]["created_at"]
+            else:
+                session["last_message"] = "No messages yet"
+                session["last_message_time"] = None
+        
+        return sessions or []
+        
+    except Exception as e:
+        print(f"Error getting user chat sessions: {e}")
+        return []
+
+def delete_chat_session(session_id: str, user_id: str) -> bool:
+    """Delete a chat session and all its messages - requires user ownership verification"""
+    try:
+        supabase = get_supabase()
+        
+        # First verify the session belongs to the user
+        session_check = (
+            supabase.table("chat_sessions")
+            .select("id, user_id")
+            .eq("id", session_id)
+            .execute()
+            .data
+        )
+        
+        if not session_check:
+            raise ValueError("Chat session not found")
+        
+        if session_check[0]["user_id"] != user_id:
+            raise ValueError("You can only delete your own chat sessions")
+        
+        # Delete all messages in the session first (due to foreign key constraints)
+        supabase.table("chat_messages").delete().eq("session_id", session_id).execute()
+        
+        # Delete the session
+        supabase.table("chat_sessions").delete().eq("id", session_id).execute()
+        
+        return True
+        
+    except Exception as e:
+        print(f"Error deleting chat session: {e}")
+        raise
+
+def enhance_response_formatting(response: str) -> str:
+    """Clean up response by removing debug messages while preserving GPT's natural formatting"""
+    if not response:
+        return response
+    
+    # Clean up debug messages and unnecessary text
+    lines = response.split('\n')
+    cleaned_lines = []
+    
+    for line in lines:
+        # Remove debug messages and connection info
+        if line.strip().startswith('> [debug]') or line.strip().startswith('[debug]'):
+            continue
+        if 'Talked to' in line and 'supabase.co' in line:
+            continue
+        if line.strip() == '':
+            cleaned_lines.append(line)
+            continue
+        
+        cleaned_lines.append(line)
+    
+    # Rejoin and clean up extra whitespace
+    cleaned_response = '\n'.join(cleaned_lines).strip()
+    
+    # Ensure proper spacing around sections
+    cleaned_response = cleaned_response.replace('\n\n\n', '\n\n')
+    
+    return cleaned_response

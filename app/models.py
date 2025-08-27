@@ -37,3 +37,16 @@ class ChatRequest(BaseModel):
     user_id: str
     session_id: str
     message: str
+
+class ChatSessionResponse(BaseModel):
+    id: str
+    title: str
+    created_at: datetime
+    message_count: int
+    last_message: str
+    last_message_time: Optional[datetime] = None
+
+class ChatSessionsListResponse(BaseModel):
+    user_id: str
+    sessions: list[ChatSessionResponse]
+    total_sessions: int
