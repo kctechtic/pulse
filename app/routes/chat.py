@@ -1,15 +1,25 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from app.chat import create_session, call_openai, get_user_chat_sessions, delete_chat_session
+from app.chat import create_session, call_openai, get_user_chat_sessions, delete_chat_session, get_chat_detail
 from app.auth import get_current_user
-from ..models import ChatRequest, CreateSessionRequest, ChatSessionsListResponse
+from ..models import ChatRequest, CreateSessionRequest, ChatSessionsListResponse, ChatDetailResponse
 from ..database import get_supabase
 
 router = APIRouter(prefix="/chat", tags=["chatbot"])
 
 @router.get("/sessions", response_model=ChatSessionsListResponse)
-def get_chat_sessions(current_user: dict = Depends(get_current_user)):
-    """Get all chat sessions for the authenticated user"""
+def get_chat_sessions(
+    page: int = 1, 
+    pagination: int = 10, 
+    current_user: dict = Depends(get_current_user)
+):
+    """Get paginated chat sessions for the authenticated user"""
     try:
+        # Validate pagination parameters
+        if page < 1:
+            page = 1
+        if pagination < 1 or pagination > 100:
+            pagination = 10
+        
         # Get the authenticated user's ID
         supabase = get_supabase()
         response = supabase.table("users").select("id").eq("email", current_user["email"]).execute()
@@ -21,13 +31,18 @@ def get_chat_sessions(current_user: dict = Depends(get_current_user)):
         
         user_id = response.data[0]["id"]
         
-        # Get chat sessions for this user
-        sessions = get_user_chat_sessions(user_id)
+        # Get paginated chat sessions for this user
+        result = get_user_chat_sessions(user_id, page, pagination)
         
         return ChatSessionsListResponse(
             user_id=user_id,
-            sessions=sessions,
-            total_sessions=len(sessions)
+            sessions=result["sessions"],
+            total_sessions=result["total_sessions"],
+            page=result["page"],
+            pagination=result["pagination"],
+            total_pages=result["total_pages"],
+            has_next=result["has_next"],
+            has_prev=result["has_prev"]
         )
         
     except Exception as e:
@@ -170,6 +185,49 @@ def chat(req: ChatRequest, current_user: dict = Depends(get_current_user)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to process chat message"
+        )
+
+@router.get("/sessions/{session_id}/detail", response_model=ChatDetailResponse)
+def get_chat_detail_endpoint(session_id: str, current_user: dict = Depends(get_current_user)):
+    """Get detailed chat information including all messages for a specific session"""
+    try:
+        # Get the authenticated user's ID
+        supabase = get_supabase()
+        response = supabase.table("users").select("id").eq("email", current_user["email"]).execute()
+        if not response.data:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found"
+            )
+        
+        user_id = response.data[0]["id"]
+        
+        # Get chat detail (function handles ownership verification)
+        chat_detail = get_chat_detail(session_id, user_id)
+        
+        return ChatDetailResponse(**chat_detail)
+        
+    except ValueError as e:
+        # Handle specific validation errors
+        if "not found" in str(e).lower():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat session not found"
+            )
+        elif "only view your own" in str(e).lower():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only view your own chat sessions"
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e)
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve chat detail"
         )
 
 

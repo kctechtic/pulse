@@ -50,3 +50,23 @@ class ChatSessionsListResponse(BaseModel):
     user_id: str
     sessions: list[ChatSessionResponse]
     total_sessions: int
+    page: int
+    pagination: int
+    total_pages: int
+    has_next: bool
+    has_prev: bool
+
+class ChatMessageResponse(BaseModel):
+    id: str
+    role: str
+    content: str
+    created_at: datetime
+    session_id: str
+
+class ChatDetailResponse(BaseModel):
+    session_id: str
+    title: str
+    created_at: datetime
+    user_id: str
+    messages: list[ChatMessageResponse]
+    total_messages: int
