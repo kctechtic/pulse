@@ -255,17 +255,30 @@ def get_history(session_id: str) -> list:
         print(f"Error getting history: {e}")
         return []
 
-def get_user_chat_sessions(user_id: str) -> list:
-    """Get all chat sessions for a user with basic info"""
+def get_user_chat_sessions(user_id: str, page: int = 1, pagination: int = 10) -> dict:
+    """Get paginated chat sessions for a user with basic info"""
     try:
         supabase = get_supabase()
         
-        # Get chat sessions (only using existing columns)
+        # Calculate offset for pagination
+        offset = (page - 1) * pagination
+        
+        # Get total count of sessions for this user
+        total_count_response = (
+            supabase.table("chat_sessions")
+            .select("id", count="exact")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        total_sessions = total_count_response.count or 0
+        
+        # Get paginated chat sessions
         sessions = (
             supabase.table("chat_sessions")
             .select("id, title, created_at")
             .eq("user_id", user_id)
             .order("created_at", desc=True)
+            .range(offset, offset + pagination - 1)
             .execute()
             .data
         )
@@ -299,11 +312,77 @@ def get_user_chat_sessions(user_id: str) -> list:
                 session["last_message"] = "No messages yet"
                 session["last_message_time"] = None
         
-        return sessions or []
+        # Calculate pagination metadata
+        total_pages = (total_sessions + pagination - 1) // pagination if total_sessions > 0 else 0
+        has_next = page < total_pages
+        has_prev = page > 1
+        
+        return {
+            "sessions": sessions or [],
+            "total_sessions": total_sessions,
+            "page": page,
+            "pagination": pagination,
+            "total_pages": total_pages,
+            "has_next": has_next,
+            "has_prev": has_prev
+        }
         
     except Exception as e:
         print(f"Error getting user chat sessions: {e}")
-        return []
+        return {
+            "sessions": [],
+            "total_sessions": 0,
+            "page": page,
+            "pagination": pagination,
+            "total_pages": 0,
+            "has_next": False,
+            "has_prev": False
+        }
+
+def get_chat_detail(session_id: str, user_id: str) -> dict:
+    """Get detailed chat information including all messages for a specific session"""
+    try:
+        supabase = get_supabase()
+        
+        # First verify the session belongs to the user
+        session_check = (
+            supabase.table("chat_sessions")
+            .select("id, title, created_at, user_id")
+            .eq("id", session_id)
+            .execute()
+            .data
+        )
+        
+        if not session_check:
+            raise ValueError("Chat session not found")
+        
+        if session_check[0]["user_id"] != user_id:
+            raise ValueError("You can only view your own chat sessions")
+        
+        session_info = session_check[0]
+        
+        # Get all messages for this session
+        messages = (
+            supabase.table("chat_messages")
+            .select("id, role, content, created_at, session_id")
+            .eq("session_id", session_id)
+            .order("created_at")
+            .execute()
+            .data
+        )
+        
+        return {
+            "session_id": session_id,
+            "title": session_info["title"],
+            "created_at": session_info["created_at"],
+            "user_id": user_id,
+            "messages": messages or [],
+            "total_messages": len(messages) if messages else 0
+        }
+        
+    except Exception as e:
+        print(f"Error getting chat detail: {e}")
+        raise
 
 def delete_chat_session(session_id: str, user_id: str) -> bool:
     """Delete a chat session and all its messages - requires user ownership verification"""
