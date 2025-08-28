@@ -1,10 +1,23 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from app.chat import create_session, call_openai, get_user_chat_sessions, delete_chat_session, get_chat_detail
+from app.chat import create_session, call_openai, get_user_chat_sessions, delete_chat_session, get_chat_detail, get_session_info, check_question_scope
 from app.auth import get_current_user
-from ..models import ChatRequest, CreateSessionRequest, ChatSessionsListResponse, ChatDetailResponse
+from ..models import ChatRequest, CreateSessionRequest, CreateSessionResponse, ChatSessionsListResponse, ChatDetailResponse, ScopeCheckRequest
 from ..database import get_supabase
 
 router = APIRouter(prefix="/chat", tags=["chatbot"])
+
+@router.post("/scope-check")
+def scope_check_endpoint(req: ScopeCheckRequest):
+    """Check if a user question is within the allowed scope for getOrdersOverTime function only"""
+    try:
+        scope_result = check_question_scope(req.message)
+        return scope_result
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to check question scope"
+        )
 
 @router.get("/sessions", response_model=ChatSessionsListResponse)
 def get_chat_sessions(
@@ -94,7 +107,7 @@ def delete_chat_session_endpoint(session_id: str, current_user: dict = Depends(g
             detail="Failed to delete chat session"
         )
 
-@router.post("/create_chat")
+@router.post("/create_chat", response_model=CreateSessionResponse)
 def create_chat(req: CreateSessionRequest, current_user: dict = Depends(get_current_user)):
     """Create a new chat session - requires authentication"""
     # Verify the user_id matches the authenticated user
@@ -116,7 +129,12 @@ def create_chat(req: CreateSessionRequest, current_user: dict = Depends(get_curr
             )
         
         session = create_session(req.user_id, req.title)
-        return {"session_id": session["id"]}
+        return CreateSessionResponse(
+            session_id=session["id"],
+            user_id=session["user_id"],
+            title=session["title"],
+            created_at=session["created_at"]
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -128,7 +146,7 @@ tools = [
         "type": "function",
         "function": {
             "name": "getOrdersOverTime",
-            "description": "Returns revenue trends grouped by daily, weekly, or monthly interval. Use this when users ask about revenue trends, order patterns over time, or need time-based analytics. IMPORTANT: Always use current dates for relative time references.",
+            "description": "Visualize order volume trends over time. Helps detect growth, spikes, or drop-offs. Use this when users ask about order trends, growth patterns, or time-based order analytics.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -147,10 +165,6 @@ tools = [
                         "format": "date",
                         "description": "End date in YYYY-MM-DD format. For relative time references, this is typically TODAY's date. For specific periods, use the end date mentioned in the user's request. CRITICAL: Always use the current year (2025) unless explicitly requested otherwise."
                     },
-                    "currency": {
-                        "type": "string",
-                        "description": "Currency to filter revenue data (e.g., 'USD', 'EUR'). Include this only if the user specifically mentions a currency."
-                    }
                 },
                 "required": ["interval", "start_date", "end_date"]
             }
@@ -185,6 +199,55 @@ def chat(req: ChatRequest, current_user: dict = Depends(get_current_user)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to process chat message"
+        )
+
+@router.get("/sessions/{session_id}/info")
+def get_session_info_endpoint(session_id: str, current_user: dict = Depends(get_current_user)):
+    """Get basic session information including updated title"""
+    try:
+        # Get the authenticated user's ID
+        supabase = get_supabase()
+        response = supabase.table("users").select("id").eq("email", current_user["email"]).execute()
+        if not response.data:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found"
+            )
+        
+        user_id = response.data[0]["id"]
+        
+        # Get session info (function handles ownership verification)
+        session_info = get_session_info(session_id)
+        
+        # Verify ownership
+        if session_info["user_id"] != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only view your own chat sessions"
+            )
+        
+        return {
+            "session_id": session_info["id"],
+            "title": session_info["title"],
+            "created_at": session_info["created_at"],
+            "user_id": session_info["user_id"]
+        }
+        
+    except ValueError as e:
+        if "not found" in str(e).lower():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat session not found"
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e)
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve session info"
         )
 
 @router.get("/sessions/{session_id}/detail", response_model=ChatDetailResponse)
