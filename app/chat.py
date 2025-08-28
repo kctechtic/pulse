@@ -17,6 +17,46 @@ SUPABASE_FUNCTIONS = {
     "getOrdersOverTime": "get-orders-over-time",
 }
 
+def check_question_scope(user_message: str) -> dict:
+    """Check if a user question is within the allowed scope for getOrdersOverTime function only"""
+    try:
+        # Define the allowed topics and keywords for getOrdersOverTime only
+        allowed_topics = [
+            # Order Analytics - only getOrdersOverTime related
+            "order", "orders", "revenue", "sales", "purchase", "trends", "growth", "spikes", "drop-offs",
+            "time", "daily", "weekly", "monthly", "interval", "period", "date range", "over time",
+            "performance", "metrics", "analytics", "report", "chart", "graph", "visualization"
+        ]
+        
+        # Convert message to lowercase for comparison
+        message_lower = user_message.lower()
+        
+        # Check if any allowed topic is mentioned
+        is_in_scope = any(topic in message_lower for topic in allowed_topics)
+        
+        # Additional context-based checks for time-based analytics
+        if not is_in_scope:
+            # Check for time-related terms that indicate trends over time
+            time_terms = ["trend", "trends", "over time", "time series", "historical", "comparison", "growth", "decline"]
+            is_in_scope = any(term in message_lower for term in time_terms)
+        
+        return {
+            "is_in_scope": is_in_scope,
+            "message": user_message,
+            "scope_check": "passed" if is_in_scope else "failed",
+            "allowed_function": "getOrdersOverTime"
+        }
+        
+    except Exception as e:
+        print(f"Error in scope check: {e}")
+        return {
+            "is_in_scope": False,
+            "message": user_message,
+            "scope_check": "error",
+            "error": str(e),
+            "allowed_function": "getOrdersOverTime"
+        }
+
 def create_session(user_id: str, title: str = None):
     """Create a new chat session"""
     try:
@@ -37,6 +77,81 @@ def create_session(user_id: str, title: str = None):
         print(f"Failed to create session: {str(e)}")
         raise
 
+def get_session_info(session_id: str) -> dict:
+    """Get basic session information by ID"""
+    try:
+        supabase = get_supabase()
+        session = (
+            supabase.table("chat_sessions")
+            .select("id, title, created_at, user_id")
+            .eq("id", session_id)
+            .execute()
+            .data
+        )
+        
+        if session and len(session) > 0:
+            return session[0]
+        else:
+            raise ValueError("Session not found")
+            
+    except Exception as e:
+        print(f"Error getting session info: {e}")
+        raise
+
+def update_chat_title(session_id: str, user_message: str):
+    """Generate and update chat title based on first user message"""
+    try:
+        # Generate a title using OpenAI
+        title_prompt = f"Generate a short, descriptive title (max 50 characters) for a chat conversation that starts with: '{user_message[:200]}...'"
+        
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a title generator. Generate concise, descriptive titles for chat conversations. Keep titles under 50 characters and make them relevant to the conversation topic."
+                },
+                {
+                    "role": "user",
+                    "content": title_prompt
+                }
+            ],
+            temperature=0.7,
+            max_tokens=100
+        )
+        
+        generated_title = response.choices[0].message.content.strip()
+        # Clean up the title and ensure it's not too long
+        if generated_title:
+            # Remove quotes if present
+            generated_title = generated_title.strip('"\'')
+            # Truncate if too long
+            if len(generated_title) > 50:
+                generated_title = generated_title[:47] + "..."
+        else:
+            generated_title = "New Chat"
+        
+        # Update the session title in the database
+        supabase = get_supabase()
+        supabase.table("chat_sessions").update({
+            "title": generated_title
+        }).eq("id", session_id).execute()
+        
+        return generated_title
+        
+    except Exception as e:
+        print(f"Error generating chat title: {e}")
+        # If title generation fails, use a fallback
+        fallback_title = user_message[:30] + "..." if len(user_message) > 30 else user_message
+        try:
+            supabase = get_supabase()
+            supabase.table("chat_sessions").update({
+                "title": fallback_title
+            }).eq("id", session_id).execute()
+        except:
+            pass
+        return fallback_title
+
 def call_openai(user_message: str, tools, session_id: str, user_id: str):
     """Main function to handle OpenAI API calls with tool support"""
     try:
@@ -44,23 +159,31 @@ def call_openai(user_message: str, tools, session_id: str, user_id: str):
         history = get_history(session_id)
         messages = [{"role": msg["role"], "content": msg["content"]} for msg in history]
 
+        # Check if this is the first message and generate title if needed
+        if len(history) == 0:
+            # This is the first message, generate a title
+            update_chat_title(session_id, user_message)
+
         # Get current date for context
         current_date = datetime.now()
         current_date_str = current_date.strftime("%Y-%m-%d")
         current_year = current_date.year
 
-        # Add system message with current date context
+        # Add system message with restricted scope for getOrdersOverTime only
         system_message = {
             "role": "system",
             "content": (
-                f"You are a business data analyst assistant. TODAY'S DATE IS {current_date_str} (Year: {current_year}). "
-                f"You are helping user {user_id} with business analytics queries. "
-                "When users ask about revenue trends, order patterns, or time-based analytics, you MUST use the getOrdersOverTime tool. "
-                "You are responsible for analyzing the user's request and determining ALL required parameters: "
+                f"You are a specialized eCommerce data analyst assistant for Shopify businesses. TODAY'S DATE IS {current_date_str} (Year: {current_year}). "
+                f"You are helping user {user_id} analyze Shopify orders and revenue trends to uncover actionable insights. "
+                f"CRITICAL INSTRUCTION: You must NEVER generate an answer directly from your own knowledge. "
+                f"For every user question, you MUST call the getOrdersOverTime API endpoint. "
+                f"AVAILABLE FUNCTION: getOrdersOverTime - for revenue trends, order patterns, and time-based analytics. "
+                f"If a question is out of scope for this endpoint, you MUST return: 'I apologize, but I cannot generate a response for this question. Please ask me something related to Shopify order trends, revenue analytics, or time-based performance metrics.' "
+                f"You are responsible for analyzing the user's request and determining ALL required parameters: "
                 "- interval: Choose 'day', 'week', or 'month' based on the user's request "
                 "- start_date: Extract or infer the start date in YYYY-MM-DD format "
                 "- end_date: Extract or infer the end date in YYYY-MM-DD format "
-                "- currency: Include if the user specifies a currency "
+
                 f"CRITICAL DATE RULE: You are working in {current_year}. When dealing with relative time references "
                 f"(like 'last week', 'past 2 weeks', 'this month'), you MUST calculate dates relative to TODAY ({current_date_str}). "
                 f"NEVER use dates from {current_year-1} or earlier unless explicitly requested. "
@@ -114,10 +237,10 @@ def handle_openai_response(response, session_id, messages):
         if getattr(message, "tool_calls", None) and message.tool_calls:
             return handle_tool_calls(message.tool_calls, session_id, messages)
         else:
-            # No tool call, just return the assistant's response
-            reply = message.content or "I apologize, but I couldn't generate a response. Please try rephrasing your question."
-            save_message(session_id, "assistant", reply)
-            return reply
+            # No tool call means the question is out of scope
+            out_of_scope_message = "I apologize, but I cannot generate a response for this question. Please ask me something related to Shopify order trends, revenue analytics, or time-based performance metrics."
+            save_message(session_id, "assistant", out_of_scope_message)
+            return out_of_scope_message
 
     except Exception as e:
         error_msg = f"Error handling OpenAI response: {str(e)}"

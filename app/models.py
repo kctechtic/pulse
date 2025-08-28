@@ -33,6 +33,15 @@ class CreateSessionRequest(BaseModel):
     user_id: str
     title: Optional[str] = None
 
+class CreateSessionResponse(BaseModel):
+    session_id: str
+    user_id: str
+    title: str
+    created_at: datetime
+
+class ScopeCheckRequest(BaseModel):
+    message: str
+
 class ChatRequest(BaseModel):
     user_id: str
     session_id: str
