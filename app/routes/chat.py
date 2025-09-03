@@ -1,23 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from app.chat import create_session, call_openai, get_user_chat_sessions, delete_chat_session, get_chat_detail, get_session_info, check_question_scope
+from app.chat import create_session, call_openai, get_user_chat_sessions, delete_chat_session, get_chat_detail, get_session_info
 from app.auth import get_current_user
-from ..models import ChatRequest, CreateSessionRequest, CreateSessionResponse, ChatSessionsListResponse, ChatDetailResponse, ScopeCheckRequest
+from ..models import ChatRequest, CreateSessionRequest, CreateSessionResponse, ChatSessionsListResponse, ChatDetailResponse
 from ..database import get_supabase
 
 router = APIRouter(prefix="/chat", tags=["chatbot"])
 
-@router.post("/scope-check")
-def scope_check_endpoint(req: ScopeCheckRequest):
-    """Check if a user question is within the allowed scope for getOrdersOverTime function only"""
-    try:
-        scope_result = check_question_scope(req.message)
-        return scope_result
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to check question scope"
-        )
+
 
 @router.get("/sessions", response_model=ChatSessionsListResponse)
 def get_chat_sessions(
@@ -142,6 +131,148 @@ def create_chat(req: CreateSessionRequest, current_user: dict = Depends(get_curr
         )
 
 tools = [
+    # Review Management Functions
+    {
+        "type": "function",
+        "function": {
+            "name": "fetchLatestOkendoReviews",
+            "description": "Fetch latest Okendo product reviews with pagination and sorting. Use this when users ask for recent reviews, want to see the latest feedback, or need paginated review data.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Number of reviews to return (default: 10, max: 50)"
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Number of reviews to skip for pagination (default: 0)"
+                    },
+                    "sort_by": {
+                        "type": "string",
+                        "enum": ["date_created", "rating", "helpful_votes"],
+                        "description": "Field to sort reviews by (default: date_created)"
+                    },
+                    "order": {
+                        "type": "string",
+                        "enum": ["asc", "desc"],
+                        "description": "Sort order - ascending or descending (default: desc)"
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getReviewsByRatingRange",
+            "description": "Filter reviews by rating range to identify patterns in low or high-rated feedback. Use this when users ask for reviews within specific rating ranges or want to analyze sentiment patterns.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "min_rating": {
+                        "type": "number",
+                        "minimum": 1,
+                        "maximum": 5,
+                        "description": "Minimum rating value (1-5)"
+                    },
+                    "max_rating": {
+                        "type": "number",
+                        "minimum": 1,
+                        "maximum": 5,
+                        "description": "Maximum rating value (1-5, must be >= min_rating)"
+                    }
+                },
+                "required": ["min_rating", "max_rating"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getReviewsByKeyword",
+            "description": "Search customer reviews that mention specific words or topics. Great for identifying trends or recurring issues mentioned in feedback.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keyword": {
+                        "type": "string",
+                        "description": "Word or phrase to search for in review content"
+                    }
+                },
+                "required": ["keyword"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getReviewsByDateRange",
+            "description": "Retrieve product reviews submitted within a specific date range. Useful for analyzing recent customer sentiment or evaluating campaign performance.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_date": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "Start date in YYYY-MM-DD format"
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "End date in YYYY-MM-DD format"
+                    }
+                },
+                "required": ["start_date", "end_date"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getReviewSummaryByProductName",
+            "description": "Get an aggregated review summary for a specific product, including average rating and review count.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "product_name": {
+                        "type": "string",
+                        "description": "Name of the product to get review summary for"
+                    }
+                },
+                "required": ["product_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getSentimentSummary",
+            "description": "Fetch reviews grouped or filtered by sentiment (positive, neutral, negative). Helps identify customer tone and sentiment trends.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "range": {
+                        "type": "string",
+                        "enum": ["this_week", "last_week", "this_month", "custom"],
+                        "description": "Preset date range. If omitted, defaults to the latest 7 days."
+                    },
+                    "start_date": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "Start date for custom range (required if range is 'custom')"
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "End date for custom range (required if range is 'custom')"
+                    }
+                }
+            }
+        }
+    },
+    
+    # Order Management Functions
     {
         "type": "function",
         "function": {
@@ -158,15 +289,279 @@ tools = [
                     "start_date": {
                         "type": "string",
                         "format": "date",
-                        "description": "Start date in YYYY-MM-DD format. For relative time references (e.g., 'last week', 'past 2 weeks'), calculate from TODAY's current date. CRITICAL: Always use current year (2025) unless explicitly requested otherwise. Never use dates from 2023 or earlier."
+                        "description": "Start date in YYYY-MM-DD format. For relative time references (e.g., 'last week', 'past 2 weeks'), calculate from TODAY's current date. CRITICAL: Always use current year unless explicitly requested otherwise."
                     },
                     "end_date": {
                         "type": "string",
                         "format": "date",
-                        "description": "End date in YYYY-MM-DD format. For relative time references, this is typically TODAY's date. For specific periods, use the end date mentioned in the user's request. CRITICAL: Always use the current year (2025) unless explicitly requested otherwise."
+                        "description": "End date in YYYY-MM-DD format. For relative time references, this is typically TODAY's date. For specific periods, use the end date mentioned in the user's request. CRITICAL: Always use the current year unless explicitly requested otherwise."
                     },
+                    "currency": {
+                        "type": "string",
+                        "description": "Currency code for monetary calculations (e.g., 'USD', 'EUR', 'CAD'). ONLY include if user specifically mentions a currency."
+                    }
                 },
-                "required": ["interval", "start_date", "end_date"]
+                "required": ["interval"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getOrdersByStatus",
+            "description": "Filter and count orders by their status like completed, pending, or cancelled. Use this when users ask about order status breakdowns, fulfillment tracking, or support issues related to order status.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status_type": {
+                        "type": "string",
+                        "enum": ["financial", "fulfillment"],
+                        "description": "Type of status to group by. Use 'financial' for payment status or 'fulfillment' for shipping status."
+                    },
+                    "start_date": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "Start date in YYYY-MM-DD format. ONLY include if user specifically requests a time period."
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "End date in YYYY-MM-DD format. ONLY include if user specifically requests a time period."
+                    },
+                    "currency": {
+                        "type": "string",
+                        "description": "Currency code for monetary calculations. ONLY include if user specifically mentions a currency."
+                    }
+                },
+                "required": ["status_type"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getOrderDetails",
+            "description": "Retrieve detailed information about a specific order by order ID. Use this when users ask for full order details, customer info, or line item breakdowns.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "order_id": {
+                        "type": "string",
+                        "description": "Order number, e.g., 7754 or #7754"
+                    }
+                },
+                "required": ["order_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getTopProducts",
+            "description": "List the best-selling products by total sales or units sold. Useful for merchandising and stock planning decisions.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of top products to return (default: 5, max: 50)"
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getLineItemAggregates",
+            "description": "Get top Shopify metrics (products, SKUs, vendors, etc.) by date range. Returns aggregated order line item metrics within specified dates.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "metric": {
+                        "type": "string",
+                        "enum": ["top_products", "top_skus", "top_variants", "top_vendors", "top_payment_gateways"],
+                        "description": "The metric to aggregate (default: top_products)"
+                    },
+                    "start_date": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "Start date (inclusive) in YYYY-MM-DD format"
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "End date (inclusive) in YYYY-MM-DD format"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Number of results to return (max: 50, default: 5)"
+                    }
+                },
+                "required": ["start_date", "end_date"]
+            }
+        }
+    },
+    
+    # Discount Analysis Functions
+    {
+        "type": "function",
+        "function": {
+            "name": "getDiscountUsage",
+            "description": "Track how often discount codes were used, and total revenue impact. Use this for discount strategy analysis and performance tracking.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getOrdersWithDiscounts",
+            "description": "Get a list of orders where discount codes were applied. Use this to analyze discount effectiveness and customer behavior.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    
+    # Customer Management Functions
+    {
+        "type": "function",
+        "function": {
+            "name": "getCustomers",
+            "description": "Retrieve a list of all customers and their basic info. Use this for customer database overview and basic customer information.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getTopCustomers",
+            "description": "Identify your highest-value customers based on lifetime spend or order count. Use this for VIP customer identification and retention strategies.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "duration": {
+                        "type": "string",
+                        "enum": ["7d", "30d", "90d", "365d"],
+                        "description": "Timeframe for filtering orders (default: last 7 days)"
+                    },
+                    "limit": {
+                        "type": "string",
+                        "enum": ["5", "10"],
+                        "description": "Maximum number of top customers to return"
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getInactiveCustomers",
+            "description": "Find customers who haven't placed an order recently. Helps with re-engagement campaigns and customer lifecycle management.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days": {
+                        "type": "integer",
+                        "description": "Number of days to check inactivity (default: 30)"
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getCustomerSignupsOverTime",
+            "description": "Track new customer signups across time periods. Use this for growth analysis and marketing campaign effectiveness.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "period": {
+                        "type": "integer",
+                        "description": "How many days back to include (default: 30)"
+                    },
+                    "group": {
+                        "type": "string",
+                        "enum": ["day", "week", "month"],
+                        "description": "How to group the results (default: day)"
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getCustomerOrders",
+            "description": "Fetch order history for a specific customer. Use this for customer support, order tracking, and customer relationship management.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "email": {
+                        "type": "string",
+                        "format": "email",
+                        "description": "The email of the customer (use either email OR customer_id, not both)"
+                    },
+                    "customer_id": {
+                        "type": "string",
+                        "description": "The Shopify customer ID (use either email OR customer_id, not both)"
+                    }
+                }
+            }
+        }
+    },
+    
+    # Analytics Functions
+    {
+        "type": "function",
+        "function": {
+            "name": "getPostPurchaseInsights",
+            "description": "Analyze open-ended survey feedback from customers after purchase to detect common themes or sentiment. Use this for customer experience improvement.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "User's query, e.g., 'Summarize July feedback about pricing.'"
+                    },
+                    "start_date": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "Optional start date for filtering responses"
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "Optional end date for filtering responses"
+                    }
+                },
+                "required": ["question"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "restrictedAnswer",
+            "description": "Return only restricted answers from Supabase. This endpoint queries Supabase and returns ONLY answers that match the restricted domain.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The user query that needs to be restricted"
+                    }
+                },
+                "required": ["query"]
             }
         }
     }

@@ -15,47 +15,50 @@ SUPABASE_API_KEY = settings.supabase_anon_key
 # Mapping of tool names to Supabase Edge function endpoints
 SUPABASE_FUNCTIONS = {
     "getOrdersOverTime": "get-orders-over-time",
+    "getOrdersByStatus": "get-orders-by-status",
+    "fetchLatestOkendoReviews": "okendo-review-query",
+    "getReviewsByRatingRange": "get-reviews-by-rating-range",
+    "getReviewsByKeyword": "get-reviews-by-keyword",
+    "getReviewsByDateRange": "get-reviews-by-date-range",
+    "getReviewSummaryByProductName": "get-review-summary-by-product-name",
+    "getSentimentSummary": "get-reviews-by-sentiment",
+    "getOrderDetails": "get-order-details",
+    "getTopProducts": "get-top-products",
+    "getLineItemAggregates": "get-line-item-aggregates",
+    "getDiscountUsage": "get-discount-usage",
+    "getOrdersWithDiscounts": "get-orders-with-discounts",
+    "getCustomers": "get-customers",
+    "getTopCustomers": "get-top-customers",
+    "getInactiveCustomers": "get-inactive-customers",
+    "getCustomerSignupsOverTime": "get-customer-signups-over-time",
+    "getCustomerOrders": "get-customer-orders",
+    "getPostPurchaseInsights": "analyze-post-purchase-feedback",
+    "restrictedAnswer": "scope-check"
 }
 
-def check_question_scope(user_message: str) -> dict:
-    """Check if a user question is within the allowed scope for getOrdersOverTime function only"""
-    try:
-        # Define the allowed topics and keywords for getOrdersOverTime only
-        allowed_topics = [
-            # Order Analytics - only getOrdersOverTime related
-            "order", "orders", "revenue", "sales", "purchase", "trends", "growth", "spikes", "drop-offs",
-            "time", "daily", "weekly", "monthly", "interval", "period", "date range", "over time",
-            "performance", "metrics", "analytics", "report", "chart", "graph", "visualization"
-        ]
-        
-        # Convert message to lowercase for comparison
-        message_lower = user_message.lower()
-        
-        # Check if any allowed topic is mentioned
-        is_in_scope = any(topic in message_lower for topic in allowed_topics)
-        
-        # Additional context-based checks for time-based analytics
-        if not is_in_scope:
-            # Check for time-related terms that indicate trends over time
-            time_terms = ["trend", "trends", "over time", "time series", "historical", "comparison", "growth", "decline"]
-            is_in_scope = any(term in message_lower for term in time_terms)
-        
-        return {
-            "is_in_scope": is_in_scope,
-            "message": user_message,
-            "scope_check": "passed" if is_in_scope else "failed",
-            "allowed_function": "getOrdersOverTime"
-        }
-        
-    except Exception as e:
-        print(f"Error in scope check: {e}")
-        return {
-            "is_in_scope": False,
-            "message": user_message,
-            "scope_check": "error",
-            "error": str(e),
-            "allowed_function": "getOrdersOverTime"
-        }
+# Mapping of functions that use GET vs POST method
+HTTP_METHODS = {
+    "getOrdersOverTime": "POST",
+    "getOrdersByStatus": "POST",
+    "fetchLatestOkendoReviews": "GET",
+    "getReviewsByRatingRange": "GET",
+    "getReviewsByKeyword": "GET",
+    "getReviewsByDateRange": "GET",
+    "getReviewSummaryByProductName": "GET",
+    "getSentimentSummary": "POST",
+    "getOrderDetails": "POST",
+    "getTopProducts": "GET",
+    "getLineItemAggregates": "POST",
+    "getDiscountUsage": "POST",
+    "getOrdersWithDiscounts": "GET",
+    "getCustomers": "GET",
+    "getTopCustomers": "GET",
+    "getInactiveCustomers": "GET",
+    "getCustomerSignupsOverTime": "GET",
+    "getCustomerOrders": "GET",
+    "getPostPurchaseInsights": "POST",
+    "restrictedAnswer": "POST"
+}
 
 def create_session(user_id: str, title: str = None):
     """Create a new chat session"""
@@ -94,7 +97,7 @@ def get_session_info(session_id: str) -> dict:
         else:
             raise ValueError("Session not found")
             
-    except Exception as e:
+    except Exception as e:  
         print(f"Error getting session info: {e}")
         raise
 
@@ -169,21 +172,70 @@ def call_openai(user_message: str, tools, session_id: str, user_id: str):
         current_date_str = current_date.strftime("%Y-%m-%d")
         current_year = current_date.year
 
-        # Add system message with restricted scope for getOrdersOverTime only
+        # Add system message for eCommerce data analysis
         system_message = {
             "role": "system",
             "content": (
                 f"You are a specialized eCommerce data analyst assistant for Shopify businesses. TODAY'S DATE IS {current_date_str} (Year: {current_year}). "
-                f"You are helping user {user_id} analyze Shopify orders and revenue trends to uncover actionable insights. "
-                f"CRITICAL INSTRUCTION: You must NEVER generate an answer directly from your own knowledge. "
-                f"For every user question, you MUST call the getOrdersOverTime API endpoint. "
-                f"AVAILABLE FUNCTION: getOrdersOverTime - for revenue trends, order patterns, and time-based analytics. "
-                f"If a question is out of scope for this endpoint, you MUST return: 'I apologize, but I cannot generate a response for this question. Please ask me something related to Shopify order trends, revenue analytics, or time-based performance metrics.' "
-                f"You are responsible for analyzing the user's request and determining ALL required parameters: "
-                "- interval: Choose 'day', 'week', or 'month' based on the user's request "
-                "- start_date: Extract or infer the start date in YYYY-MM-DD format "
-                "- end_date: Extract or infer the end date in YYYY-MM-DD format "
-
+                f"You are helping user {user_id} analyze Shopify orders and revenue data to uncover actionable insights. "
+                f"AVAILABLE FUNCTIONS: "
+                f"- getOrdersOverTime: for revenue trends, order patterns, and time-based analytics "
+                f"- getOrdersByStatus: for order status breakdowns, fulfillment tracking, and support issues "
+                f"- fetchLatestOkendoReviews: for fetching the latest Okendo reviews "
+                f"- getReviewsByRatingRange: for filtering reviews by rating "
+                f"- getReviewsByKeyword: for filtering reviews by keyword "
+                f"- getReviewsByDateRange: for filtering reviews by date "
+                f"- getReviewSummaryByProductName: for getting a summary of reviews for a specific product "
+                f"- getSentimentSummary: for getting a sentiment summary of reviews "
+                f"- getOrderDetails: for getting detailed information about a specific order "
+                f"- getTopProducts: for getting the top-selling products "
+                f"- getLineItemAggregates: for getting aggregated line item data "
+                f"- getDiscountUsage: for analyzing discount usage across orders "
+                f"- getOrdersWithDiscounts: for getting orders that used specific discounts "
+                f"- getCustomers: for getting all customers "
+                f"- getTopCustomers: for getting the top-spending customers "
+                f"- getInactiveCustomers: for getting customers who haven't made orders in a while "
+                f"- getCustomerSignupsOverTime: for tracking customer signup trends "
+                f"- getCustomerOrders: for getting orders for a specific customer "
+                f"- getPostPurchaseInsights: for analyzing post-purchase feedback "
+                f"- restrictedAnswer: for providing answers that are restricted to certain scopes "
+                f"You are responsible for analyzing the user's request and determining which function to use and the appropriate parameters: "
+                f"REVIEW FUNCTIONS: "
+                f"- fetchLatestOkendoReviews (OPTIONAL: limit, offset, sort_by, order): Get latest Okendo reviews with pagination and sorting "
+                f"- getReviewsByRatingRange (REQUIRED: min_rating, max_rating): Filter reviews by rating range (1-5) "
+                f"- getReviewsByKeyword (REQUIRED: keyword): Search reviews containing specific words "
+                f"- getReviewsByDateRange (REQUIRED: start_date, end_date): Get reviews within date range "
+                f"- getReviewSummaryByProductName (REQUIRED: product_name): Get aggregated review stats for a product "
+                f"- getSentimentSummary (OPTIONAL: range, start_date, end_date): Get sentiment analysis of reviews "
+                f"ORDER FUNCTIONS: "
+                f"- getOrdersOverTime (REQUIRED: interval, OPTIONAL: start_date, end_date): Revenue trends over time "
+                f"- getOrdersByStatus (REQUIRED: status_type, OPTIONAL: start_date, end_date, currency): Order status breakdowns "
+                f"- getOrderDetails (REQUIRED: order_id): Detailed order information by order number "
+                f"- getTopProducts (OPTIONAL: limit): Top-selling products by revenue/quantity "
+                f"- getLineItemAggregates (REQUIRED: start_date, end_date, OPTIONAL: metric, limit): Aggregated line item metrics "
+                f"- getDiscountUsage (NO PARAMS): Discount code usage statistics "
+                f"- getOrdersWithDiscounts (NO PARAMS): Orders that applied discounts "
+                f"CUSTOMER FUNCTIONS: "
+                f"- getCustomers (NO PARAMS): List all customers with basic info "
+                f"- getTopCustomers (OPTIONAL: duration, limit): Top customers by total sales "
+                f"- getInactiveCustomers (OPTIONAL: days): Customers inactive for specified days "
+                f"- getCustomerSignupsOverTime (OPTIONAL: period, group): Customer signup trends "
+                f"- getCustomerOrders (OPTIONAL: email, customer_id): Orders for specific customer "
+                f"ANALYTICS FUNCTIONS: "
+                f"- getPostPurchaseInsights (REQUIRED: question, OPTIONAL: start_date, end_date): Analyze post-purchase feedback "
+                f"- restrictedAnswer (REQUIRED: query): Get restricted domain answers "
+                f"PARAMETER RULES: "
+                f"- For date parameters: ONLY include when user explicitly requests specific time periods "
+                f"- For rating ranges: Use 1-5 scale, min_rating must be <= max_rating "
+                f"- For intervals: Use 'day', 'week', or 'month' for time-based functions "
+                f"- For status_type: Use 'financial' for payment status, 'fulfillment' for shipping status "
+                f"- For metrics: Use 'top_products', 'top_skus', 'top_variants', 'top_vendors', 'top_payment_gateways' "
+                f"CRITICAL RULES: "
+                f"- For functions with date parameters: ONLY include start_date/end_date when user explicitly requests specific time periods "
+                f"- For rating-based functions: Ensure min_rating <= max_rating and both are between 1-5 "
+                f"- For customer functions: Use email OR customer_id, not both "
+                f"- For line item aggregates: metric must be one of the allowed values "
+                f"- For sentiment analysis: range must be one of 'this_week', 'last_week', 'this_month', or 'custom' "
                 f"CRITICAL DATE RULE: You are working in {current_year}. When dealing with relative time references "
                 f"(like 'last week', 'past 2 weeks', 'this month'), you MUST calculate dates relative to TODAY ({current_date_str}). "
                 f"NEVER use dates from {current_year-1} or earlier unless explicitly requested. "
@@ -237,10 +289,10 @@ def handle_openai_response(response, session_id, messages):
         if getattr(message, "tool_calls", None) and message.tool_calls:
             return handle_tool_calls(message.tool_calls, session_id, messages)
         else:
-            # No tool call means the question is out of scope
-            out_of_scope_message = "I apologize, but I cannot generate a response for this question. Please ask me something related to Shopify order trends, revenue analytics, or time-based performance metrics."
-            save_message(session_id, "assistant", out_of_scope_message)
-            return out_of_scope_message
+            # No tool call - provide a helpful response
+            no_tool_message = "I understand your question, but I need to use the available data analysis tools to provide you with accurate information. Could you please rephrase your question to be more specific about what Shopify order or revenue data you'd like to analyze?"
+            save_message(session_id, "assistant", no_tool_message)
+            return no_tool_message
 
     except Exception as e:
         error_msg = f"Error handling OpenAI response: {str(e)}"
@@ -263,6 +315,10 @@ def handle_tool_calls(tool_calls, session_id, messages):
             try:
                 fn_name = tool_call.function.name
                 fn_args = json.loads(tool_call.function.arguments or "{}")
+                
+                print(f"\n🚀 EXECUTING TOOL: {fn_name}")
+                print(f"📝 Tool Arguments: {json.dumps(fn_args, indent=2, default=str)}")
+                print("-" * 60)
                 
                 # Call Supabase Edge Function directly with GPT's parameters
                 result = call_supabase_edge(fn_name, fn_args)
@@ -313,6 +369,17 @@ def call_supabase_edge(fn_name: str, args: dict) -> dict:
         mapped_name = SUPABASE_FUNCTIONS.get(fn_name, fn_name)
         url = f"{SUPABASE_BASE_URL}/{mapped_name}"
         
+        # Print detailed API call information
+        print("=" * 80)
+        print("🔍 SUPABASE API CALL DEBUG INFO")
+        print("=" * 80)
+        print(f"📞 Function Name: {fn_name}")
+        print(f"🔗 Mapped Endpoint: {mapped_name}")
+        print(f"🌐 Full URL: {url}")
+        print(f"📋 Parameters: {json.dumps(args, indent=2, default=str)}")
+        print(f"⏰ Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print("-" * 80)
+        
         headers = {
             "Authorization": f"Bearer {SUPABASE_API_KEY}",
             "apikey": SUPABASE_API_KEY,
@@ -320,30 +387,57 @@ def call_supabase_edge(fn_name: str, args: dict) -> dict:
             "User-Agent": "Pacer-CIL-Chat/1.0"
         }
         
-        response = requests.post(url, headers=headers, json=args, timeout=30)
+        # Determine HTTP method based on function
+        http_method = HTTP_METHODS.get(fn_name, "POST")
+        
+        if http_method == "GET":
+            # For GET requests, add parameters as query string
+            if args:
+                import urllib.parse
+                query_params = urllib.parse.urlencode(args)
+                url = f"{url}?{query_params}"
+            print(f"📤 Making GET request to: {url}")
+            response = requests.get(url, headers=headers, timeout=30)
+        else:
+            # For POST requests, send data in body
+            print(f"📤 Making POST request to: {url}")
+            print(f"📦 Request payload: {json.dumps(args, indent=2, default=str)}")
+            response = requests.post(url, headers=headers, json=args, timeout=30)
+        
+        print(f"📥 Response Status: {response.status_code}")
+        print(f"📄 Response Headers: {dict(response.headers)}")
         
         if response.status_code == 200:
             try:
                 result = response.json()
+                print(f"✅ Success Response: {json.dumps(result, indent=2, default=str)}")
+                print("=" * 80)
                 return result
             except json.JSONDecodeError as e:
+                print(f"⚠️  JSON Decode Error: {e}")
+                print(f"📄 Raw Response: {response.text}")
+                print("=" * 80)
                 return {"data": response.text, "warning": "Response was not valid JSON"}
         else:
             error_msg = f"Supabase function returned status {response.status_code}: {response.text}"
-            print(error_msg)
+            print(f"❌ Error Response: {error_msg}")
+            print("=" * 80)
             return {"error": error_msg, "status_code": response.status_code}
             
     except requests.exceptions.Timeout:
         error_msg = "Request to Supabase function timed out"
-        print(error_msg)
+        print(f"⏰ Timeout Error: {error_msg}")
+        print("=" * 80)
         return {"error": error_msg}
     except requests.exceptions.RequestException as req_err:
         error_msg = f"Request to Supabase function failed: {str(req_err)}"
-        print(error_msg)
+        print(f"🌐 Request Error: {error_msg}")
+        print("=" * 80)
         return {"error": error_msg}
     except Exception as e:
         error_msg = f"Unexpected error calling Supabase function: {str(e)}"
-        print(error_msg)
+        print(f"💥 Unexpected Error: {error_msg}")
+        print("=" * 80)
         return {"error": error_msg}
 
 def save_message(session_id: str, role: str, content: str):
