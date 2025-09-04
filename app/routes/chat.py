@@ -564,6 +564,143 @@ tools = [
                 "required": ["query"]
             }
         }
+    },
+    
+    # Klaviyo Event Analytics Functions
+    {
+        "type": "function",
+        "function": {
+            "name": "getEventCounts",
+            "description": "Fetch counts of events by type within a specified date range. Use this to analyze event patterns and understand user behavior across different event types.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_date": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "Start date (inclusive) in YYYY-MM-DD format"
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "End date (inclusive) in YYYY-MM-DD format"
+                    }
+                },
+                "required": ["start_date", "end_date"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getEmailEventRatios",
+            "description": "Get email engagement ratios including open rate, click rate, and click-to-open rate. Use this to analyze email campaign performance and engagement metrics.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_date": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "Start date in YYYY-MM-DD format"
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "End date in YYYY-MM-DD format"
+                    }
+                },
+                "required": ["start_date", "end_date"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getTopClickedUrls",
+            "description": "Get the most clicked URLs from email campaigns. Use this to identify which links are most engaging and optimize email content.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_date": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "Start date in YYYY-MM-DD format"
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "End date in YYYY-MM-DD format"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Number of top URLs to return (default: 3, max: 20)"
+                    }
+                },
+                "required": ["start_date", "end_date"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getCampaignReasoning",
+            "description": "Get campaign engagement reasoning and daily trends. Use this to understand campaign performance patterns and identify factors affecting engagement rates.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_date": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "Start date in ISO 8601 format"
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "End date in ISO 8601 format"
+                    },
+                    "campaign_id": {
+                        "type": "string",
+                        "description": "Optional campaign ID to filter results"
+                    }
+                },
+                "required": ["start_date", "end_date"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getEventLogSlice",
+            "description": "Get a filtered set of event log data with campaign and device insights. Use this to analyze specific event types, user behavior, and campaign performance.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_date": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "Start date in YYYY-MM-DD format"
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "End date in YYYY-MM-DD format"
+                    },
+                    "event_type": {
+                        "type": "string",
+                        "description": "Type of event to filter (e.g., 'Clicked Email', 'Opened Email')"
+                    },
+                    "email": {
+                        "type": "string",
+                        "description": "Email address to filter by (partial match supported)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of events to return (default: 10)"
+                    }
+                },
+                "required": ["start_date", "end_date"]
+            }
+        }
     }
 ]
 

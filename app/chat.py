@@ -33,7 +33,13 @@ SUPABASE_FUNCTIONS = {
     "getCustomerSignupsOverTime": "get-customer-signups-over-time",
     "getCustomerOrders": "get-customer-orders",
     "getPostPurchaseInsights": "analyze-post-purchase-feedback",
-    "restrictedAnswer": "scope-check"
+    "restrictedAnswer": "scope-check",
+    # Klaviyo Event Analytics Functions
+    "getEventCounts": "get-event-counts",
+    "getEmailEventRatios": "get-email-click-ratio",
+    "getTopClickedUrls": "get-top-clicked-urls",
+    "getCampaignReasoning": "campaign_reasoning",
+    "getEventLogSlice": "get-event-log-slice"
 }
 
 # Mapping of functions that use GET vs POST method
@@ -57,7 +63,13 @@ HTTP_METHODS = {
     "getCustomerSignupsOverTime": "GET",
     "getCustomerOrders": "GET",
     "getPostPurchaseInsights": "POST",
-    "restrictedAnswer": "POST"
+    "restrictedAnswer": "POST",
+    # Klaviyo Event Analytics Functions
+    "getEventCounts": "POST",
+    "getEmailEventRatios": "POST",
+    "getTopClickedUrls": "POST",
+    "getCampaignReasoning": "POST",
+    "getEventLogSlice": "POST"
 }
 
 def create_session(user_id: str, title: str = None):
@@ -199,6 +211,12 @@ def call_openai(user_message: str, tools, session_id: str, user_id: str):
                 f"- getCustomerOrders: for getting orders for a specific customer "
                 f"- getPostPurchaseInsights: for analyzing post-purchase feedback "
                 f"- restrictedAnswer: for providing answers that are restricted to certain scopes "
+                f"KLAVIYO EVENT ANALYTICS FUNCTIONS: "
+                f"- getEventCounts: for getting event counts by type within date ranges "
+                f"- getEmailEventRatios: for email engagement ratios (open rate, click rate, etc.) "
+                f"- getTopClickedUrls: for most clicked URLs from email campaigns "
+                f"- getCampaignReasoning: for campaign engagement reasoning and daily trends "
+                f"- getEventLogSlice: for filtered event log data with campaign and device insights "
                 f"You are responsible for analyzing the user's request and determining which function to use and the appropriate parameters: "
                 f"REVIEW FUNCTIONS: "
                 f"- fetchLatestOkendoReviews (OPTIONAL: limit, offset, sort_by, order): Get latest Okendo reviews with pagination and sorting "
@@ -224,18 +242,26 @@ def call_openai(user_message: str, tools, session_id: str, user_id: str):
                 f"ANALYTICS FUNCTIONS: "
                 f"- getPostPurchaseInsights (REQUIRED: question, OPTIONAL: start_date, end_date): Analyze post-purchase feedback "
                 f"- restrictedAnswer (REQUIRED: query): Get restricted domain answers "
+                f"KLAVIYO EVENT ANALYTICS FUNCTIONS: "
+                f"- getEventCounts (REQUIRED: start_date, end_date): Get event counts by type within date range "
+                f"- getEmailEventRatios (REQUIRED: start_date, end_date): Get email engagement ratios and rates "
+                f"- getTopClickedUrls (REQUIRED: start_date, end_date, OPTIONAL: limit): Get top clicked URLs with counts "
+                f"- getCampaignReasoning (REQUIRED: start_date, end_date, OPTIONAL: campaign_id): Get campaign engagement reasoning and trends "
+                f"- getEventLogSlice (REQUIRED: start_date, end_date, OPTIONAL: event_type, email, limit): Get filtered event log data "
                 f"PARAMETER RULES: "
                 f"- For date parameters: ONLY include when user explicitly requests specific time periods "
                 f"- For rating ranges: Use 1-5 scale, min_rating must be <= max_rating "
                 f"- For intervals: Use 'day', 'week', or 'month' for time-based functions "
                 f"- For status_type: Use 'financial' for payment status, 'fulfillment' for shipping status "
                 f"- For metrics: Use 'top_products', 'top_skus', 'top_variants', 'top_vendors', 'top_payment_gateways' "
+                f"- For Klaviyo functions: start_date and end_date must be in YYYY-MM-DD format "
                 f"CRITICAL RULES: "
                 f"- For functions with date parameters: ONLY include start_date/end_date when user explicitly requests specific time periods "
                 f"- For rating-based functions: Ensure min_rating <= max_rating and both are between 1-5 "
                 f"- For customer functions: Use email OR customer_id, not both "
                 f"- For line item aggregates: metric must be one of the allowed values "
                 f"- For sentiment analysis: range must be one of 'this_week', 'last_week', 'this_month', or 'custom' "
+                f"- For Klaviyo functions: Always use YYYY-MM-DD format for dates "
                 f"CRITICAL DATE RULE: You are working in {current_year}. When dealing with relative time references "
                 f"(like 'last week', 'past 2 weeks', 'this month'), you MUST calculate dates relative to TODAY ({current_date_str}). "
                 f"NEVER use dates from {current_year-1} or earlier unless explicitly requested. "
