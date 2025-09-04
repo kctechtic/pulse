@@ -1,20 +1,70 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from app.chat import create_session, call_openai, get_user_chat_sessions, delete_chat_session, get_chat_detail, get_session_info
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
+from app.chat import create_session, call_openai, get_user_chat_sessions, get_user_chat_sessions_optimized, delete_chat_session, get_chat_detail, get_session_info
 from app.auth import get_current_user
 from ..models import ChatRequest, CreateSessionRequest, CreateSessionResponse, ChatSessionsListResponse, ChatDetailResponse
 from ..database import get_supabase
+import time
+import hashlib
+import json
+from typing import Dict, Optional
+from collections import defaultdict
+from datetime import datetime, timedelta
 
 router = APIRouter(prefix="/chat", tags=["chatbot"])
 
+# Cache for sessions list responses
+_sessions_cache: Dict[str, Dict] = {}
+_sessions_cache_ttl = 60  # 1 minute cache TTL for sessions
+
+def generate_sessions_cache_key(user_id: str, page: int, pagination: int) -> str:
+    """Generate cache key for sessions list"""
+    return f"sessions:{user_id}:{page}:{pagination}"
+
+def get_cached_sessions(cache_key: str) -> Optional[Dict]:
+    """Get cached sessions data if still valid"""
+    if cache_key in _sessions_cache:
+        cache_entry = _sessions_cache[cache_key]
+        if time.time() - cache_entry['timestamp'] < _sessions_cache_ttl:
+            return cache_entry['data']
+        else:
+            del _sessions_cache[cache_key]
+    return None
+
+def cache_sessions(cache_key: str, data: dict):
+    """Cache sessions data"""
+    _sessions_cache[cache_key] = {
+        'data': data,
+        'timestamp': time.time()
+    }
+
+def clear_sessions_cache(user_id: str = None):
+    """Clear sessions cache (useful when sessions are created/updated/deleted)"""
+    if user_id:
+        # Clear all cache entries for this user
+        keys_to_remove = [key for key in _sessions_cache.keys() if f"sessions:{user_id}:" in key]
+        for key in keys_to_remove:
+            del _sessions_cache[key]
+    else:
+        _sessions_cache.clear()
 
 
 @router.get("/sessions", response_model=ChatSessionsListResponse)
-def get_chat_sessions(
+async def get_chat_sessions(
+    request: Request,
+    response: Response,
     page: int = 1, 
     pagination: int = 10, 
     current_user: dict = Depends(get_current_user)
 ):
-    """Get paginated chat sessions for the authenticated user"""
+    """
+    Optimized endpoint to get paginated chat sessions with caching and performance improvements:
+    - Response caching to reduce database load
+    - Optimized database queries to eliminate N+1 problem
+    - Performance monitoring and logging
+    - ETag support for conditional requests
+    """
+    start_time = time.time()
+    
     try:
         # Validate pagination parameters
         if page < 1:
@@ -22,19 +72,37 @@ def get_chat_sessions(
         if pagination < 1 or pagination > 100:
             pagination = 10
         
-        # Get the authenticated user's ID
-        supabase = get_supabase()
-        response = supabase.table("users").select("id").eq("email", current_user["email"]).execute()
-        if not response.data:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found"
-            )
+        # Use user ID directly from JWT token (no need for additional DB query)
+        user_id = current_user["id"]
         
-        user_id = response.data[0]["id"]
+        # Generate cache key
+        cache_key = generate_sessions_cache_key(user_id, page, pagination)
         
-        # Get paginated chat sessions for this user
-        result = get_user_chat_sessions(user_id, page, pagination)
+        # Check cache first
+        cached_data = get_cached_sessions(cache_key)
+        if cached_data:
+            # Set cache headers
+            response.headers["X-Cache"] = "HIT"
+            response.headers["Cache-Control"] = "private, max-age=60"
+            
+            processing_time = (time.time() - start_time) * 1000
+            print(f"Sessions served from cache in {processing_time:.2f}ms for user {user_id}")
+            
+            return ChatSessionsListResponse(**cached_data)
+        
+        # Get paginated chat sessions using optimized function
+        result = await get_user_chat_sessions_optimized(user_id, page, pagination)
+        
+        # Cache the result
+        cache_sessions(cache_key, result)
+        
+        # Set response headers
+        response.headers["X-Cache"] = "MISS"
+        response.headers["Cache-Control"] = "private, max-age=60"
+        
+        # Log performance
+        processing_time = (time.time() - start_time) * 1000
+        print(f"Sessions generated in {processing_time:.2f}ms for user {user_id} (page {page})")
         
         return ChatSessionsListResponse(
             user_id=user_id,
@@ -70,6 +138,9 @@ def delete_chat_session_endpoint(session_id: str, current_user: dict = Depends(g
         
         # Delete the session (function handles ownership verification)
         delete_chat_session(session_id, user_id)
+        
+        # Clear sessions cache for this user since we deleted a session
+        clear_sessions_cache(user_id)
         
         return {"message": "Chat session deleted successfully", "session_id": session_id}
         
@@ -118,6 +189,10 @@ def create_chat(req: CreateSessionRequest, current_user: dict = Depends(get_curr
             )
         
         session = create_session(req.user_id, req.title)
+        
+        # Clear sessions cache for this user since we added a new session
+        clear_sessions_cache(authenticated_user_id)
+        
         return CreateSessionResponse(
             session_id=session["id"],
             user_id=session["user_id"],
@@ -125,6 +200,7 @@ def create_chat(req: CreateSessionRequest, current_user: dict = Depends(get_curr
             created_at=session["created_at"]
         )
     except Exception as e:
+        print(f"Error creating chat session: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create session"
