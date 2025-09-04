@@ -190,6 +190,7 @@ def call_openai(user_message: str, tools, session_id: str, user_id: str):
             "content": (
                 f"You are a specialized eCommerce data analyst assistant for Shopify businesses. TODAY'S DATE IS {current_date_str} (Year: {current_year}). "
                 f"You are helping user {user_id} analyze Shopify orders and revenue data to uncover actionable insights. "
+                f"Make your responses engaging and visually appealing by using appropriate emojis and clear formatting. "
                 f"AVAILABLE FUNCTIONS: "
                 f"- getOrdersOverTime: for revenue trends, order patterns, and time-based analytics "
                 f"- getOrdersByStatus: for order status breakdowns, fulfillment tracking, and support issues "
@@ -271,6 +272,7 @@ def call_openai(user_message: str, tools, session_id: str, user_id: str):
                 f"Remember: 'last two weeks' means the most recent 2 weeks ending on {current_date_str}, not some arbitrary period from {current_year-1}. "
                 f"RESPONSE FORMATTING: Format your responses naturally and clearly, just like ChatGPT does. "
                 f"Use **bold** for important numbers and key findings when it makes sense. "
+                f"Use relevant emojis to make your responses more engaging and visually appealing (e.g., 📊 for data analysis, 💰 for revenue, 📈 for growth trends, 📉 for declines, ⚠️ for warnings, ✅ for positive insights, 🎯 for key findings, 📅 for dates). "
                 f"Present data in a readable way that's easy to understand. "
                 f"Structure your response logically with clear sections and proper spacing."
             )
