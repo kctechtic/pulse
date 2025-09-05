@@ -92,6 +92,41 @@ def create_session(user_id: str, title: str = None):
         print(f"Failed to create session: {str(e)}")
         raise
 
+async def create_session_optimized(user_id: str, title: str = None) -> dict:
+    """
+    Optimized session creation with enhanced validation and error handling
+    """
+    try:
+        if not user_id:
+            raise ValueError("user_id is required")
+        
+        # Validate title length and content
+        if title:
+            title = title.strip()
+            if len(title) > 200:
+                title = title[:200] + "..."
+            if not title:
+                title = None
+        
+        supabase = get_supabase()
+        
+        # Create session with optimized insert
+        session_data = {
+            "user_id": user_id,
+            "title": title or "New Chat"
+        }
+        
+        resp = supabase.table("chat_sessions").insert(session_data).execute()
+        
+        if resp.data and len(resp.data) > 0:
+            return resp.data[0]
+        else:
+            raise Exception("Failed to create session - no data returned")
+            
+    except Exception as e:
+        print(f"Failed to create session: {str(e)}")
+        raise
+
 def get_session_info(session_id: str) -> dict:
     """Get basic session information by ID"""
     try:
@@ -168,15 +203,314 @@ def update_chat_title(session_id: str, user_message: str):
         return fallback_title
 
 def call_openai(user_message: str, tools, session_id: str, user_id: str):
-    """Main function to handle OpenAI API calls with tool support"""
+    """
+    Legacy function for backward compatibility - calls the optimized version
+    """
+    import asyncio
+    return asyncio.run(call_openai_optimized(user_message, tools, session_id, user_id))
+
+async def call_openai_streaming(user_message: str, tools, session_id: str, user_id: str):
+    """
+    Streaming OpenAI API call function for real-time responses
+    """
     try:
-        # Get chat history
+        # Get chat history asynchronously
         history = get_history(session_id)
         messages = [{"role": msg["role"], "content": msg["content"]} for msg in history]
 
         # Check if this is the first message and generate title if needed
         if len(history) == 0:
-            # This is the first message, generate a title
+            # This is the first message, generate a title asynchronously
+            update_chat_title(session_id, user_message)
+
+        # Get current date for context
+        current_date = datetime.now()
+        current_date_str = current_date.strftime("%Y-%m-%d")
+        current_year = current_date.year
+
+        # Optimized system message - more concise for faster processing
+        system_message = {
+            "role": "system",
+            "content": (
+                f"""You are an AI assistant for e-commerce analytics.
+                    You have access to multiple functions via OpenAPI.
+                    Your goal is to dynamically decide which function(s) to call based on the user's request.
+
+                    TODAY'S DATE IS {current_date_str} (Year: {current_year}).
+                    You are helping user {user_id} analyze Shopify orders, customers, discounts, and Klaviyo/Okendo reviews to uncover actionable insights.
+
+                    ## Rules:
+                    1. Always check if a single function is enough.
+                    2. If a question requires multiple data sources, plan the sequence of calls.
+                    - Example: "Who are my top customers this month by revenue trend?"
+                        → Step 1: Call getTopCustomers with duration=30d.
+                        → Step 2: For each customer, call getCustomerOrders or combine with getOrdersOverTime.
+                        → Step 3: Summarize.
+                    3. Use chaining when insights require reasoning.
+                    - Example: Discounts impact on revenue → Call getOrdersWithDiscounts, then getOrdersOverTime.
+                    - Example: Product sentiment vs sales → Call getReviewSummaryByProductName, then getLineItemAggregates.
+                    4. Always explain reasoning in natural language after retrieving data.
+                    5. Never fabricate values. If data is missing, say so.
+
+                    ## Output format:
+                    - When calling functions, always use the schema provided.
+                    - After function calls, summarize insights in plain English.
+
+                    ## AVAILABLE FUNCTIONS
+
+                    ### Orders
+                    - getOrdersOverTime (interval, start_date?, end_date?) → Revenue trends
+                    - getOrdersByStatus (status_type, start_date?, end_date?, currency?) → Order breakdowns
+                    - getOrderDetails (order_id) → Single order details
+                    - getTopProducts (limit?) → Top-selling products
+                    - getLineItemAggregates (start_date, end_date, metric?, limit?) → Product/variant/vendor aggregates
+                    - getDiscountUsage () → Discount usage stats
+                    - getOrdersWithDiscounts () → Orders that used discounts
+
+                    ### Customers
+                    - getCustomers () → List customers
+                    - getTopCustomers (duration?, limit?) → Top spenders
+                    - getInactiveCustomers (days?) → Inactive customers
+                    - getCustomerSignupsOverTime (period?, group?) → Signup trends
+                    - getCustomerOrders (email? | customer_id?) → Orders per customer
+
+                    ### Reviews (Okendo)
+                    - fetchLatestOkendoReviews (limit?, offset?, sort_by?, order?) → Latest reviews
+                    - getReviewsByRatingRange (min_rating, max_rating) → Reviews filtered by rating
+                    - getReviewsByKeyword (keyword) → Reviews with keyword
+                    - getReviewsByDateRange (start_date, end_date) → Reviews by date range
+                    - getReviewSummaryByProductName (product_name) → Aggregated review stats
+                    - getSentimentSummary (range?, start_date?, end_date?) → Sentiment insights
+
+                    ### Klaviyo Analytics
+                    - getEventCounts (start_date, end_date) → Event counts by type
+                    - getEmailEventRatios (start_date, end_date) → Open/click ratios
+                    - getTopClickedUrls (start_date, end_date, limit?) → Top clicked URLs
+                    - getCampaignReasoning (start_date, end_date, campaign_id?) → Campaign engagement reasoning
+                    - getEventLogSlice (start_date, end_date, event_type?, email?, limit?) → Raw event log slice
+
+                    ### Analytics
+                    - getPostPurchaseInsights (question, start_date?, end_date?) → Post-purchase survey analysis
+                    - restrictedAnswer (query) → Restricted answers
+
+                    ## Parameter Rules:
+                    - For date parameters: ONLY include when user explicitly requests specific time periods
+                    - For rating ranges: Use 1-5 scale, min_rating must be <= max_rating
+                    - For intervals: Use 'day', 'week', or 'month' for time-based functions
+                    - For status_type: Use 'financial' for payment status, 'fulfillment' for shipping status
+                    - For metrics: Use 'top_products', 'top_skus', 'top_variants', 'top_vendors', 'top_payment_gateways'
+                    - For Klaviyo functions: start_date and end_date must be in YYYY-MM-DD format
+
+                    ## Critical Rules:
+                    - For functions with date parameters: ONLY include start_date/end_date when user explicitly requests specific time periods
+                    - For rating-based functions: Ensure min_rating <= max_rating and both are between 1-5
+                    - For customer functions: Use email OR customer_id, not both
+                    - For line item aggregates: metric must be one of the allowed values
+                    - For sentiment analysis: range must be one of 'this_week', 'last_week', 'this_month', or 'custom'
+                    - For Klaviyo functions: Always use YYYY-MM-DD format for dates
+
+                    ## Critical Date Rule:
+                    You are working in {current_year}. When dealing with relative time references (like 'last week', 'past 2 weeks', 'this month'), you MUST calculate dates relative to TODAY ({current_date_str}). NEVER use dates from {current_year-1} or earlier unless explicitly requested. For example: 'last two weeks' should be from 2 weeks ago to {current_date_str}, using {current_year}. Current date context: The user wants recent, current data from {current_year}. If you see 'last week', 'past week', 'recent', etc., always use dates from {current_year} and recent past. Remember: 'last two weeks' means the most recent 2 weeks ending on {current_date_str}, not some arbitrary period from {current_year-1}.
+
+                    ## Response Formatting:
+                    Format your responses exactly like ChatGPT with rich, professional formatting. Use **bold** for important numbers and key findings. Use relevant emojis to make responses engaging.
+
+                    ### Formatting Rules:
+                    - Use markdown tables (| Column 1 | Column 2 |) for structured data like order lists, revenue breakdowns, product comparisons
+                    - Use bullet points (-) for lists and insights
+                    - Use numbered lists (1.) for step-by-step processes
+                    - Use code blocks (```) for any code, SQL queries, or technical details
+                    - Use headers (##, ###) to organize sections clearly
+                    - Use blockquotes (>) for important callouts or warnings
+                    - Use horizontal rules (---) to separate major sections
+                    - Present data in the most readable format - tables for structured data, lists for insights, paragraphs for explanations
+
+                    ### Formatting Examples:
+                    - For order data: Use tables with columns like Order ID, Date, Amount, Status
+                    - For revenue breakdowns: Use tables with Period, Revenue, Growth columns
+                    - For product lists: Use tables with Product, Sales, Revenue columns
+                    - For insights: Use bullet points with emojis
+                    - For step-by-step analysis: Use numbered lists
+                    - For warnings or important notes: Use blockquotes with ⚠️ emoji
+
+                    Structure your response logically with clear sections and proper spacing.
+
+                    ## Response Ending:
+                    End responses naturally without generic phrases like 'feel free to ask' or 'let me know if you need help'. Instead, end with specific, actionable next steps or relevant follow-up questions when appropriate.
+
+                    **Good endings:** 'Would you like me to analyze the top-performing products?' or 'Should I investigate the revenue dip in Week 34?'
+                    **Avoid:** Generic phrases like 'feel free to ask' or 'let me know if you need help'."""
+            )
+        }
+
+        # Prepare messages for OpenAI
+        openai_messages = [system_message] + messages + [
+            {
+                "role": "user", 
+                "content": f"Current date context: Today is {current_date_str} (Year {current_year}). Please use this as your reference for all relative time calculations."
+            },
+            {"role": "user", "content": user_message}
+        ]
+        
+        # Save user message
+        save_message(session_id, "user", user_message)
+
+        # Call OpenAI with streaming
+        stream = client.chat.completions.create(
+            model="gpt-4o",
+            messages=openai_messages,
+            tools=tools,
+            tool_choice="auto",
+            temperature=0.1,
+            max_tokens=4000,
+            stream=True
+        )
+
+        # Handle streaming response
+        async for chunk in handle_openai_streaming_response(stream, session_id, openai_messages):
+            yield chunk
+
+    except Exception as e:
+        error_msg = f"Error in call_openai_streaming: {str(e)}"
+        print(error_msg)
+        save_message(session_id, "assistant", error_msg)
+        yield {"type": "error", "content": error_msg}
+
+async def handle_openai_streaming_response(stream, session_id: str, messages: list):
+    """
+    Handle streaming response from OpenAI API
+    """
+    try:
+        accumulated_content = ""
+        tool_calls = []
+        current_tool_call = None
+        
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+                
+            delta = chunk.choices[0].delta
+            
+            # Handle tool calls
+            if delta.tool_calls:
+                for tool_call_delta in delta.tool_calls:
+                    if tool_call_delta.index is not None:
+                        # Ensure we have enough tool calls in our list
+                        while len(tool_calls) <= tool_call_delta.index:
+                            tool_calls.append({
+                                "id": "",
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""}
+                            })
+                        
+                        current_tool_call = tool_calls[tool_call_delta.index]
+                        
+                        if tool_call_delta.id:
+                            current_tool_call["id"] = tool_call_delta.id
+                        if tool_call_delta.type:
+                            current_tool_call["type"] = tool_call_delta.type
+                        if tool_call_delta.function:
+                            if tool_call_delta.function.name:
+                                current_tool_call["function"]["name"] = tool_call_delta.function.name
+                            if tool_call_delta.function.arguments:
+                                current_tool_call["function"]["arguments"] += tool_call_delta.function.arguments
+            
+            # Handle regular content
+            elif delta.content:
+                accumulated_content += delta.content
+                yield {
+                    "type": "content",
+                    "content": delta.content
+                }
+        
+        # If we have tool calls, handle them
+        if tool_calls and any(tc.get("function", {}).get("name") for tc in tool_calls):
+            yield {"type": "tool_calls", "content": "Processing your request..."}
+            
+            # Add assistant's tool call request to messages
+            messages.append({
+                "role": "assistant",
+                "content": accumulated_content,
+                "tool_calls": tool_calls
+            })
+            
+            # Execute each tool call
+            for tool_call in tool_calls:
+                try:
+                    fn_name = tool_call["function"]["name"]
+                    fn_args = json.loads(tool_call["function"]["arguments"] or "{}")
+                    
+                    yield {"type": "tool_execution", "content": f"Executing {fn_name}..."}
+                    
+                    # Call Supabase Edge Function directly with GPT's parameters
+                    result = call_supabase_edge(fn_name, fn_args)
+                    
+                    # Add tool result to messages
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": json.dumps(result, default=str)
+                    })
+                    
+                except Exception as tool_error:
+                    print(f"Error executing tool {fn_name}: {tool_error}")
+                    error_result = {"error": f"Tool execution failed: {str(tool_error)}"}
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": json.dumps(error_result)
+                    })
+            
+            # Get final response from OpenAI with tool results
+            yield {"type": "final_response", "content": "Generating final response..."}
+            
+            final_stream = client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+                temperature=0.1,
+                max_tokens=4000,
+                stream=True
+            )
+            
+            final_content = ""
+            for chunk in final_stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    content = chunk.choices[0].delta.content
+                    final_content += content
+                    yield {
+                        "type": "content",
+                        "content": content
+                    }
+            
+            # Save the final response
+            if final_content:
+                final_content = enhance_response_formatting(final_content)
+                save_message(session_id, "assistant", final_content)
+        
+        else:
+            # No tool calls, just save the accumulated content
+            if accumulated_content:
+                accumulated_content = enhance_response_formatting(accumulated_content)
+                save_message(session_id, "assistant", accumulated_content)
+    
+    except Exception as e:
+        error_msg = f"Error handling streaming response: {str(e)}"
+        print(error_msg)
+        save_message(session_id, "assistant", error_msg)
+        yield {"type": "error", "content": error_msg}
+
+async def call_openai_optimized(user_message: str, tools, session_id: str, user_id: str):
+    """
+    Optimized OpenAI API call function with streaming and performance improvements
+    """
+    try:
+        # Get chat history asynchronously
+        history = get_history(session_id)
+        messages = [{"role": msg["role"], "content": msg["content"]} for msg in history]
+
+        # Check if this is the first message and generate title if needed
+        if len(history) == 0:
+            # This is the first message, generate a title asynchronously
             update_chat_title(session_id, user_message)
 
         # Get current date for context
@@ -298,20 +632,37 @@ def call_openai(user_message: str, tools, session_id: str, user_id: str):
         #     )
         # }
 
+        # Optimized system message - more concise for faster processing
         system_message = {
             "role": "system",
             "content": (
-                f"""
-                    You are a specialized eCommerce data analyst assistant for Shopify businesses.
+                f"""You are an AI assistant for e-commerce analytics.
+                    You have access to multiple functions via OpenAPI.
+                    Your goal is to dynamically decide which function(s) to call based on the user's request.
+
                     TODAY'S DATE IS {current_date_str} (Year: {current_year}).
                     You are helping user {user_id} analyze Shopify orders, customers, discounts, and Klaviyo/Okendo reviews to uncover actionable insights.
-                    ### Core Role
-                    - You are NOT just answering — you are an **orchestrator** of multiple Supabase Edge Functions.
-                    - Analyze user queries → dynamically decide which function(s) to call → synthesize the results → deliver business insights.
-                    - You may call **multiple functions in sequence** to generate intelligent answers.
-                    ---
-                    ### AVAILABLE FUNCTIONS
-                    #### Orders
+
+                    ## Rules:
+                    1. Always check if a single function is enough.
+                    2. If a question requires multiple data sources, plan the sequence of calls.
+                    - Example: "Who are my top customers this month by revenue trend?"
+                        → Step 1: Call getTopCustomers with duration=30d.
+                        → Step 2: For each customer, call getCustomerOrders or combine with getOrdersOverTime.
+                        → Step 3: Summarize.
+                    3. Use chaining when insights require reasoning.
+                    - Example: Discounts impact on revenue → Call getOrdersWithDiscounts, then getOrdersOverTime.
+                    - Example: Product sentiment vs sales → Call getReviewSummaryByProductName, then getLineItemAggregates.
+                    4. Always explain reasoning in natural language after retrieving data.
+                    5. Never fabricate values. If data is missing, say so.
+
+                    ## Output format:
+                    - When calling functions, always use the schema provided.
+                    - After function calls, summarize insights in plain English.
+
+                    ## AVAILABLE FUNCTIONS
+
+                    ### Orders
                     - getOrdersOverTime (interval, start_date?, end_date?) → Revenue trends
                     - getOrdersByStatus (status_type, start_date?, end_date?, currency?) → Order breakdowns
                     - getOrderDetails (order_id) → Single order details
@@ -319,71 +670,80 @@ def call_openai(user_message: str, tools, session_id: str, user_id: str):
                     - getLineItemAggregates (start_date, end_date, metric?, limit?) → Product/variant/vendor aggregates
                     - getDiscountUsage () → Discount usage stats
                     - getOrdersWithDiscounts () → Orders that used discounts
-                    #### Customers
+
+                    ### Customers
                     - getCustomers () → List customers
                     - getTopCustomers (duration?, limit?) → Top spenders
                     - getInactiveCustomers (days?) → Inactive customers
                     - getCustomerSignupsOverTime (period?, group?) → Signup trends
                     - getCustomerOrders (email? | customer_id?) → Orders per customer
-                    #### Reviews (Okendo)
+
+                    ### Reviews (Okendo)
                     - fetchLatestOkendoReviews (limit?, offset?, sort_by?, order?) → Latest reviews
                     - getReviewsByRatingRange (min_rating, max_rating) → Reviews filtered by rating
                     - getReviewsByKeyword (keyword) → Reviews with keyword
                     - getReviewsByDateRange (start_date, end_date) → Reviews by date range
                     - getReviewSummaryByProductName (product_name) → Aggregated review stats
                     - getSentimentSummary (range?, start_date?, end_date?) → Sentiment insights
-                    #### Klaviyo Analytics
+
+                    ### Klaviyo Analytics
                     - getEventCounts (start_date, end_date) → Event counts by type
                     - getEmailEventRatios (start_date, end_date) → Open/click ratios
                     - getTopClickedUrls (start_date, end_date, limit?) → Top clicked URLs
                     - getCampaignReasoning (start_date, end_date, campaign_id?) → Campaign engagement reasoning
                     - getEventLogSlice (start_date, end_date, event_type?, email?, limit?) → Raw event log slice
-                    #### Analytics
+
+                    ### Analytics
                     - getPostPurchaseInsights (question, start_date?, end_date?) → Post-purchase survey analysis
                     - restrictedAnswer (query) → Restricted answers
-                    ---
-                    ### Multifunction Orchestration Rules
-                    1. **Function Routing**
-                    - Parse user query → determine best function(s).
-                    - Route dynamically. If multiple calls are needed, chain them.
-                    - Example: “Top customers by revenue last month” →
-                        (a) getOrdersOverTime → (b) aggregate by customer → (c) getTopCustomers.
-                    2. **Chaining & Reasoning**
-                    - Use results from one function to enrich or filter another.
-                    - Always produce a **final human-friendly insight**, not raw JSON.
-                    3. **Date Handling**
-                    - Relative dates (“last week”, “past month”) must resolve against TODAY ({current_date_str}, {current_year}).
-                    - Never use data from {current_year-1} unless explicitly requested.
-                    4. **Validation**
-                    - Ensure required parameters are present (e.g., order_id, rating ranges).
-                    - Enforce constraints (ratings 1–5, interval in [day, week, month], etc).
-                    5. **Error Handling**
-                    - If data missing → explain gracefully.
-                    - If multiple interpretations → state assumptions.
-                    ---
-                    ### Response Formatting
-                    - Use tables for structured data (orders, products, revenue).
-                    - Use bullet points for insights.
-                    - Use headers (##, ###) for sections.
-                    - Use emojis to make insights engaging.
-                    - End with a relevant next-step suggestion, not a generic phrase.
-                    **Example Output**
-                    ---
-                    ## :bar_chart: Revenue Trends (Last Month)
-                    | Week | Revenue | Growth |
-                    |------|---------|--------|
-                    | W1   | $12,340 | —      |
-                    | W2   | $14,210 | +15%   |
-                    :fire: Growth peaked in Week 2, likely due to mid-month promotions.
-                    ## :crown: Top Customers
-                    | Name     | Spend |
-                    |----------|-------|
-                    | Sarah K. | $2,450|
-                    | John D.  | $2,200|
-                    :sparkles: Sarah & John contributed 15% of revenue.
-                    :arrow_right: Should I break this down by discount usage?
-                    ---
-                    """
+
+                    ## Parameter Rules:
+                    - For date parameters: ONLY include when user explicitly requests specific time periods
+                    - For rating ranges: Use 1-5 scale, min_rating must be <= max_rating
+                    - For intervals: Use 'day', 'week', or 'month' for time-based functions
+                    - For status_type: Use 'financial' for payment status, 'fulfillment' for shipping status
+                    - For metrics: Use 'top_products', 'top_skus', 'top_variants', 'top_vendors', 'top_payment_gateways'
+                    - For Klaviyo functions: start_date and end_date must be in YYYY-MM-DD format
+
+                    ## Critical Rules:
+                    - For functions with date parameters: ONLY include start_date/end_date when user explicitly requests specific time periods
+                    - For rating-based functions: Ensure min_rating <= max_rating and both are between 1-5
+                    - For customer functions: Use email OR customer_id, not both
+                    - For line item aggregates: metric must be one of the allowed values
+                    - For sentiment analysis: range must be one of 'this_week', 'last_week', 'this_month', or 'custom'
+                    - For Klaviyo functions: Always use YYYY-MM-DD format for dates
+
+                    ## Critical Date Rule:
+                    You are working in {current_year}. When dealing with relative time references (like 'last week', 'past 2 weeks', 'this month'), you MUST calculate dates relative to TODAY ({current_date_str}). NEVER use dates from {current_year-1} or earlier unless explicitly requested. For example: 'last two weeks' should be from 2 weeks ago to {current_date_str}, using {current_year}. Current date context: The user wants recent, current data from {current_year}. If you see 'last week', 'past week', 'recent', etc., always use dates from {current_year} and recent past. Remember: 'last two weeks' means the most recent 2 weeks ending on {current_date_str}, not some arbitrary period from {current_year-1}.
+
+                    ## Response Formatting:
+                    Format your responses exactly like ChatGPT with rich, professional formatting. Use **bold** for important numbers and key findings. Use relevant emojis to make responses engaging.
+
+                    ### Formatting Rules:
+                    - Use markdown tables (| Column 1 | Column 2 |) for structured data like order lists, revenue breakdowns, product comparisons
+                    - Use bullet points (-) for lists and insights
+                    - Use numbered lists (1.) for step-by-step processes
+                    - Use code blocks (```) for any code, SQL queries, or technical details
+                    - Use headers (##, ###) to organize sections clearly
+                    - Use blockquotes (>) for important callouts or warnings
+                    - Use horizontal rules (---) to separate major sections
+                    - Present data in the most readable format - tables for structured data, lists for insights, paragraphs for explanations
+
+                    ### Formatting Examples:
+                    - For order data: Use tables with columns like Order ID, Date, Amount, Status
+                    - For revenue breakdowns: Use tables with Period, Revenue, Growth columns
+                    - For product lists: Use tables with Product, Sales, Revenue columns
+                    - For insights: Use bullet points with emojis
+                    - For step-by-step analysis: Use numbered lists
+                    - For warnings or important notes: Use blockquotes with ⚠️ emoji
+
+                    Structure your response logically with clear sections and proper spacing.
+
+                    ## Response Ending:
+                    End responses naturally without generic phrases like 'feel free to ask' or 'let me know if you need help'. Instead, end with specific, actionable next steps or relevant follow-up questions when appropriate.
+
+                    **Good endings:** 'Would you like me to analyze the top-performing products?' or 'Should I investigate the revenue dip in Week 34?'
+                    **Avoid:** Generic phrases like 'feel free to ask' or 'let me know if you need help'."""
             )
         }
 
@@ -860,6 +1220,50 @@ def delete_chat_session(session_id: str, user_id: str) -> bool:
         
         # Delete the session
         supabase.table("chat_sessions").delete().eq("id", session_id).execute()
+        
+        return True
+        
+    except Exception as e:
+        print(f"Error deleting chat session: {e}")
+        raise
+
+async def delete_chat_session_optimized(session_id: str, user_id: str) -> bool:
+    """
+    Optimized session deletion with enhanced validation and error handling
+    """
+    try:
+        if not session_id or not session_id.strip():
+            raise ValueError("Session ID is required")
+        
+        if not user_id or not user_id.strip():
+            raise ValueError("User ID is required")
+        
+        session_id = session_id.strip()
+        user_id = user_id.strip()
+        
+        supabase = get_supabase()
+        
+        # Single query to verify ownership and get session info
+        session_check = (
+            supabase.table("chat_sessions")
+            .select("id, user_id, title")
+            .eq("id", session_id)
+            .eq("user_id", user_id)  # Add user_id filter to make query more efficient
+            .execute()
+            .data
+        )
+        
+        if not session_check:
+            raise ValueError("Chat session not found or you don't have permission to delete it")
+        
+        # Delete all messages in the session first (due to foreign key constraints)
+        messages_deleted = supabase.table("chat_messages").delete().eq("session_id", session_id).execute()
+        
+        # Delete the session
+        session_deleted = supabase.table("chat_sessions").delete().eq("id", session_id).execute()
+        
+        if not session_deleted.data:
+            raise Exception("Failed to delete session")
         
         return True
         

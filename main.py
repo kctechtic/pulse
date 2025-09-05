@@ -5,7 +5,10 @@ from app.routes import auth, chat
 app = FastAPI(
     title="Pacer CIL Chatbot",
     description="A FastAPI application with OpenAI GPT-4 integration and Supabase Edge Functions",
-    version="1.0.0"
+    version="1.0.0",
+    swagger_ui_parameters={
+        "persistAuthorization": True,  # Remember auth across page reloads
+    }
 )
 
 # CORS middleware

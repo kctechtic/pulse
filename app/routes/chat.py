@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
-from app.chat import create_session, call_openai, get_user_chat_sessions, get_user_chat_sessions_optimized, delete_chat_session, get_chat_detail, get_session_info
+from fastapi.responses import StreamingResponse
+from app.chat import create_session, create_session_optimized, call_openai, call_openai_optimized, call_openai_streaming, get_user_chat_sessions, get_user_chat_sessions_optimized, delete_chat_session, delete_chat_session_optimized, get_chat_detail, get_session_info
 from app.auth import get_current_user
 from ..models import ChatRequest, CreateSessionRequest, CreateSessionResponse, ChatSessionsListResponse, ChatDetailResponse
 from ..database import get_supabase
 import time
 import hashlib
 import json
-from typing import Dict, Optional
+import asyncio
+from typing import Dict, Optional, Generator
 from collections import defaultdict
 from datetime import datetime, timedelta
 
@@ -15,6 +17,10 @@ router = APIRouter(prefix="/chat", tags=["chatbot"])
 # Cache for sessions list responses
 _sessions_cache: Dict[str, Dict] = {}
 _sessions_cache_ttl = 60  # 1 minute cache TTL for sessions
+
+# Rate limiting for session creation
+_session_creation_attempts: Dict[str, list] = defaultdict(list)
+_max_session_creation_per_hour = 20
 
 def generate_sessions_cache_key(user_id: str, page: int, pagination: int) -> str:
     """Generate cache key for sessions list"""
@@ -46,6 +52,27 @@ def clear_sessions_cache(user_id: str = None):
             del _sessions_cache[key]
     else:
         _sessions_cache.clear()
+
+def check_session_creation_rate_limit(user_id: str) -> bool:
+    """
+    Check if user has exceeded rate limit for session creation
+    """
+    now = datetime.now()
+    hour_ago = now - timedelta(hours=1)
+    
+    # Clean old attempts
+    _session_creation_attempts[user_id] = [
+        attempt_time for attempt_time in _session_creation_attempts[user_id]
+        if attempt_time > hour_ago
+    ]
+    
+    # Check if under limit
+    if len(_session_creation_attempts[user_id]) >= _max_session_creation_per_hour:
+        return False
+    
+    # Record this attempt
+    _session_creation_attempts[user_id].append(now)
+    return True
 
 
 @router.get("/sessions", response_model=ChatSessionsListResponse)
@@ -122,39 +149,71 @@ async def get_chat_sessions(
         )
 
 @router.delete("/sessions/{session_id}")
-def delete_chat_session_endpoint(session_id: str, current_user: dict = Depends(get_current_user)):
-    """Delete a specific chat session and all its messages - requires authentication"""
+async def delete_chat_session_endpoint(
+    session_id: str, 
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Optimized endpoint to delete a specific chat session with enhanced performance:
+    - Eliminated redundant database queries
+    - Enhanced input validation
+    - Performance monitoring and logging
+    - Automatic cache invalidation
+    - Better error handling
+    """
+    start_time = time.time()
+    
     try:
-        # Get the authenticated user's ID
-        supabase = get_supabase()
-        response = supabase.table("users").select("id").eq("email", current_user["email"]).execute()
-        if not response.data:
+        # Use user ID directly from JWT token (no need for additional DB query)
+        user_id = current_user["id"]
+        
+        # Validate session_id format
+        if not session_id or not session_id.strip():
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found"
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Session ID is required"
             )
         
-        user_id = response.data[0]["id"]
+        session_id = session_id.strip()
         
-        # Delete the session (function handles ownership verification)
-        delete_chat_session(session_id, user_id)
+        # Delete the session using optimized function
+        success = await delete_chat_session_optimized(session_id, user_id)
+        
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to delete session"
+            )
         
         # Clear sessions cache for this user since we deleted a session
         clear_sessions_cache(user_id)
         
-        return {"message": "Chat session deleted successfully", "session_id": session_id}
+        # Log performance
+        processing_time = (time.time() - start_time) * 1000
+        print(f"Session deleted in {processing_time:.2f}ms for user {user_id}")
         
+        return {
+            "message": "Chat session deleted successfully", 
+            "session_id": session_id,
+            "deleted_at": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except ValueError as e:
         # Handle specific validation errors
-        if "not found" in str(e).lower():
+        error_msg = str(e).lower()
+        if "not found" in error_msg or "permission" in error_msg:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Chat session not found"
+                detail="Chat session not found or you don't have permission to delete it"
             )
-        elif "only delete your own" in str(e).lower():
+        elif "required" in error_msg:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only delete your own chat sessions"
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e)
             )
         else:
             raise HTTPException(
@@ -162,36 +221,134 @@ def delete_chat_session_endpoint(session_id: str, current_user: dict = Depends(g
                 detail=str(e)
             )
     except Exception as e:
+        print(f"Error deleting chat session: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete chat session"
+            detail="Failed to delete chat session. Please try again."
+        )
+
+@router.delete("/sessions/bulk")
+async def bulk_delete_sessions(
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Optimized endpoint to delete multiple chat sessions at once
+    """
+    start_time = time.time()
+    
+    try:
+        # Get session IDs from request body
+        body = await request.json()
+        session_ids = body.get("session_ids", [])
+        
+        if not session_ids or not isinstance(session_ids, list):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="session_ids array is required"
+            )
+        
+        if len(session_ids) > 50:  # Limit bulk operations
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot delete more than 50 sessions at once"
+            )
+        
+        user_id = current_user["id"]
+        deleted_sessions = []
+        failed_sessions = []
+        
+        # Delete sessions in parallel
+        for session_id in session_ids:
+            try:
+                if not session_id or not session_id.strip():
+                    failed_sessions.append({"session_id": session_id, "error": "Invalid session ID"})
+                    continue
+                
+                success = await delete_chat_session_optimized(session_id.strip(), user_id)
+                if success:
+                    deleted_sessions.append(session_id)
+                else:
+                    failed_sessions.append({"session_id": session_id, "error": "Failed to delete"})
+            except Exception as e:
+                failed_sessions.append({"session_id": session_id, "error": str(e)})
+        
+        # Clear sessions cache for this user
+        clear_sessions_cache(user_id)
+        
+        # Log performance
+        processing_time = (time.time() - start_time) * 1000
+        print(f"Bulk delete completed in {processing_time:.2f}ms for user {user_id}: {len(deleted_sessions)} deleted, {len(failed_sessions)} failed")
+        
+        return {
+            "message": f"Bulk delete completed: {len(deleted_sessions)} sessions deleted",
+            "deleted_sessions": deleted_sessions,
+            "failed_sessions": failed_sessions,
+            "total_requested": len(session_ids),
+            "deleted_at": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in bulk delete: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to perform bulk delete operation"
         )
 
 @router.post("/create_chat", response_model=CreateSessionResponse)
-def create_chat(req: CreateSessionRequest, current_user: dict = Depends(get_current_user)):
-    """Create a new chat session - requires authentication"""
-    # Verify the user_id matches the authenticated user
-    supabase = get_supabase()
+async def create_chat(
+    req: CreateSessionRequest, 
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Optimized endpoint to create a new chat session with enhanced performance:
+    - Rate limiting protection against spam
+    - Enhanced input validation
+    - Eliminated redundant database queries
+    - Performance monitoring and logging
+    - Automatic cache invalidation
+    """
+    start_time = time.time()
+    
     try:
-        response = supabase.table("users").select("id").eq("email", current_user["email"]).execute()
-        if not response.data:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found"
-            )
+        # Use user ID directly from JWT token (no need for additional DB query)
+        authenticated_user_id = current_user["id"]
         
-        authenticated_user_id = response.data[0]["id"]
-        
+        # Validate user_id matches authenticated user
         if req.user_id != authenticated_user_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="User ID mismatch - you can only create sessions for yourself"
             )
         
-        session = create_session(req.user_id, req.title)
+        # Check rate limit for session creation
+        if not check_session_creation_rate_limit(authenticated_user_id):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many session creation attempts. Please try again later."
+            )
+        
+        # Validate title if provided
+        if req.title:
+            req.title = req.title.strip()
+            if len(req.title) > 200:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Session title must be 200 characters or less"
+                )
+        
+        # Create session using optimized function
+        session = await create_session_optimized(req.user_id, req.title)
         
         # Clear sessions cache for this user since we added a new session
         clear_sessions_cache(authenticated_user_id)
+        
+        # Log performance
+        processing_time = (time.time() - start_time) * 1000
+        print(f"Session created in {processing_time:.2f}ms for user {authenticated_user_id}")
         
         return CreateSessionResponse(
             session_id=session["id"],
@@ -199,11 +356,15 @@ def create_chat(req: CreateSessionRequest, current_user: dict = Depends(get_curr
             title=session["title"],
             created_at=session["created_at"]
         )
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
         print(f"Error creating chat session: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create session"
+            detail="Failed to create session. Please try again."
         )
 
 tools = [
@@ -781,32 +942,101 @@ tools = [
 ]
 
 @router.post("/chat")
-def chat(req: ChatRequest, current_user: dict = Depends(get_current_user)):
-    """Send a chat message - requires authentication"""
-    # Verify the user_id matches the authenticated user
-    supabase = get_supabase()
+async def chat(
+    req: ChatRequest, 
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Streaming chat endpoint with real-time token-by-token response:
+    - Real-time streaming responses like ChatGPT
+    - Enhanced input validation
+    - Performance monitoring and logging
+    - Tool execution progress updates
+    - Better error handling
+    """
+    start_time = time.time()
+    
     try:
-        response = supabase.table("users").select("id").eq("email", current_user["email"]).execute()
-        if not response.data:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found"
-            )
+        # Use user ID directly from JWT token (no need for additional DB query)
+        authenticated_user_id = current_user["id"]
         
-        authenticated_user_id = response.data[0]["id"]
-        
+        # Validate user_id matches authenticated user
         if req.user_id != authenticated_user_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="User ID mismatch - you can only send messages for yourself"
             )
         
-        answer = call_openai(req.message, tools, req.session_id, req.user_id)
-        return {"answer": answer}
+        # Validate message content
+        if not req.message or not req.message.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Message content is required"
+            )
+        
+        # Validate session_id
+        if not req.session_id or not req.session_id.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Session ID is required"
+            )
+        
+        # Trim and validate message length
+        req.message = req.message.strip()
+        if len(req.message) > 4000:  # Reasonable limit for chat messages
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Message is too long (max 4000 characters)"
+            )
+        
+        # Create streaming response generator
+        async def generate_stream():
+            try:
+                # Send start event
+                start_event = f"data: {json.dumps({'type': 'start', 'timestamp': datetime.now().isoformat()})}\n\n"
+                yield start_event
+                
+                # Process chat message using streaming function
+                async for chunk in call_openai_streaming(req.message, tools, req.session_id, req.user_id):
+                    chunk_data = f"data: {json.dumps(chunk)}\n\n"
+                    yield chunk_data
+                    # Force immediate flush for real-time streaming
+                    await asyncio.sleep(0)  # Yield control to allow immediate sending
+                
+                # Send completion event
+                processing_time = (time.time() - start_time) * 1000
+                complete_event = f"data: {json.dumps({'type': 'complete', 'processing_time_ms': round(processing_time, 2), 'timestamp': datetime.now().isoformat()})}\n\n"
+                yield complete_event
+                
+                print(f"Chat streamed in {processing_time:.2f}ms for user {authenticated_user_id}")
+                
+            except Exception as e:
+                error_msg = f"Error in streaming chat: {str(e)}"
+                print(error_msg)
+                error_event = f"data: {json.dumps({'type': 'error', 'error': error_msg})}\n\n"
+                yield error_event
+        
+        return StreamingResponse(
+            generate_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",  # Disable nginx buffering
+            }
+        )
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
+        print(f"Error processing chat message: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to process chat message"
+            detail="Failed to process chat message. Please try again."
         )
 
 @router.get("/sessions/{session_id}/info")

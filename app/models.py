@@ -67,8 +67,26 @@ class TokenData(BaseModel):
     email: Optional[str] = None
 
 class CreateSessionRequest(BaseModel):
-    user_id: str
-    title: Optional[str] = None
+    user_id: str = Field(..., min_length=1, description="User ID for the session")
+    title: Optional[str] = Field(None, max_length=200, description="Session title (optional, max 200 characters)")
+    
+    @validator('title')
+    def validate_title(cls, v):
+        """Validate session title"""
+        if v is not None:
+            v = v.strip()
+            if not v:
+                return None
+            if len(v) > 200:
+                raise ValueError('Session title must be 200 characters or less')
+        return v
+    
+    @validator('user_id')
+    def validate_user_id(cls, v):
+        """Validate user ID format"""
+        if not v or not v.strip():
+            raise ValueError('User ID is required')
+        return v.strip()
 
 class CreateSessionResponse(BaseModel):
     session_id: str
