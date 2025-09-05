@@ -28,7 +28,6 @@ SUPABASE_FUNCTIONS = {
     "getDiscountUsage": "get-discount-usage",
     "getOrdersWithDiscounts": "get-orders-with-discounts",
     "getCustomers": "get-customers",
-    "getTopCustomers": "get-top-customers",
     "getInactiveCustomers": "get-inactive-customers",
     "getCustomerSignupsOverTime": "get-customer-signups-over-time",
     "getCustomerOrders": "get-customer-orders",
@@ -58,7 +57,6 @@ HTTP_METHODS = {
     "getDiscountUsage": "POST",
     "getOrdersWithDiscounts": "GET",
     "getCustomers": "GET",
-    "getTopCustomers": "GET",
     "getInactiveCustomers": "GET",
     "getCustomerSignupsOverTime": "GET",
     "getCustomerOrders": "GET",
@@ -233,7 +231,6 @@ async def call_openai_streaming(user_message: str, tools, session_id: str, user_
                                                 - getOrdersWithDiscounts () → Orders that used discounts
                                                 #### Customers
                                                 - getCustomers () → List customers
-                                                - getTopCustomers (duration?, limit?) → Top spenders
                                                 - getInactiveCustomers (days?) → Inactive customers
                                                 - getCustomerSignupsOverTime (period?, group?) → Signup trends
                                                 - getCustomerOrders (email? | customer_id?) → Orders per customer
@@ -258,8 +255,8 @@ async def call_openai_streaming(user_message: str, tools, session_id: str, user_
                                                 1. **Function Routing**
                                                 - Parse user query → determine best function(s).
                                                 - Route dynamically. If multiple calls are needed, chain them.
-                                                - Example: "Top customers by revenue last month" →
-                                                    (a) getOrdersOverTime → (b) aggregate by customer → (c) getTopCustomers.
+                                                - Example: "Revenue trends last month" →
+                                                    (a) getOrdersOverTime → (b) analyze trends.
                                                 2. **Chaining & Reasoning**
                                                 - Use results from one function to enrich or filter another.
                                                 - Always produce a **final human-friendly insight**, not raw JSON.
@@ -449,17 +446,25 @@ async def handle_openai_streaming_response(stream, session_id: str, messages: li
             # Save the final response
             if final_content:
                 final_content = enhance_response_formatting(final_content)
+                print(f"\n=== FINAL CHAT RESPONSE ===")
+                print(final_content)
+                print("=" * 50)
                 save_message(session_id, "assistant", final_content)
         
         else:
             # No tool calls, just save the accumulated content
             if accumulated_content:
                 accumulated_content = enhance_response_formatting(accumulated_content)
+                print(f"\n=== FINAL CHAT RESPONSE (NO TOOL CALLS) ===")
+                print(accumulated_content)
+                print("=" * 50)
                 save_message(session_id, "assistant", accumulated_content)
     
     except Exception as e:
         error_msg = f"Error handling streaming response: {str(e)}"
+        print(f"\n=== CHAT ERROR ===")
         print(error_msg)
+        print("=" * 50)
         save_message(session_id, "assistant", error_msg)
         yield {"type": "error", "content": error_msg}
 
@@ -939,7 +944,7 @@ async def delete_chat_session_optimized(session_id: str, user_id: str) -> bool:
         raise
 
 def enhance_response_formatting(response: str) -> str:
-    """Clean up response by removing debug messages while preserving GPT's natural formatting"""
+    """Clean up response by removing debug messages and improving formatting for better readability"""
     if not response:
         return response
     
@@ -962,7 +967,30 @@ def enhance_response_formatting(response: str) -> str:
     # Rejoin and clean up extra whitespace
     cleaned_response = '\n'.join(cleaned_lines).strip()
     
-    # Ensure proper spacing around sections
-    cleaned_response = cleaned_response.replace('\n\n\n', '\n\n')
+    # Improve spacing and formatting for better readability
+    import re
+    
+    # Add spacing around headers (## and ###)
+    cleaned_response = re.sub(r'\n(#{2,3}[^\n]+)\n', r'\n\n\1\n\n', cleaned_response)
+    
+    # Add spacing around bullet points and lists
+    cleaned_response = re.sub(r'\n(- [^\n]+)\n', r'\n\1\n', cleaned_response)
+    
+    # Add spacing before and after sections with emojis
+    cleaned_response = re.sub(r'\n(- :[^:]+: [^\n]+)\n', r'\n\1\n\n', cleaned_response)
+    
+    # Add spacing around conclusion sections
+    cleaned_response = re.sub(r'\n(### Conclusion)\n', r'\n\n\1\n\n', cleaned_response)
+    cleaned_response = re.sub(r'\n(### Key Observations)\n', r'\n\n\1\n\n', cleaned_response)
+    cleaned_response = re.sub(r'\n(### Sentiment Summary)\n', r'\n\n\1\n\n', cleaned_response)
+    
+    # Add spacing around call-to-action sections
+    cleaned_response = re.sub(r'\n(:arrow_right: [^\n]+)\n', r'\n\n\1\n\n', cleaned_response)
+    
+    # Clean up excessive newlines (more than 2 consecutive)
+    cleaned_response = re.sub(r'\n{3,}', '\n\n', cleaned_response)
+    
+    # Ensure proper spacing at the beginning and end
+    cleaned_response = cleaned_response.strip()
     
     return cleaned_response
