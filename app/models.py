@@ -1,6 +1,7 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, validator, Field
 from typing import Optional
 from datetime import datetime
+import re
 
 class UserBase(BaseModel):
     email: EmailStr
@@ -8,7 +9,43 @@ class UserBase(BaseModel):
     last_name: Optional[str] = None
 
 class UserCreate(UserBase):
-    password: str
+    password: str = Field(..., min_length=8, max_length=128)
+    first_name: str = Field(..., min_length=1, max_length=50)
+    last_name: str = Field(..., min_length=1, max_length=50)
+    
+    @validator('password')
+    def validate_password(cls, v):
+        """Validate password strength"""
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters long')
+        if not re.search(r'[A-Z]', v):
+            raise ValueError('Password must contain at least one uppercase letter')
+        if not re.search(r'[a-z]', v):
+            raise ValueError('Password must contain at least one lowercase letter')
+        if not re.search(r'\d', v):
+            raise ValueError('Password must contain at least one digit')
+        if not re.search(r'[!@#$%^&*(),.?":{}|<>]', v):
+            raise ValueError('Password must contain at least one special character')
+        return v
+    
+    @validator('first_name', 'last_name')
+    def validate_names(cls, v):
+        """Validate name fields"""
+        if not v or not v.strip():
+            raise ValueError('Name cannot be empty')
+        if not re.match(r'^[a-zA-Z\s\-\.]+$', v):
+            raise ValueError('Name can only contain letters, spaces, hyphens, and periods')
+        return v.strip()
+    
+    @validator('email')
+    def validate_email_domain(cls, v):
+        """Basic email domain validation"""
+        # Additional validation beyond EmailStr
+        if v and '@' in v:
+            domain = v.split('@')[1]
+            if len(domain) < 3:
+                raise ValueError('Invalid email domain')
+        return v
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -30,8 +67,26 @@ class TokenData(BaseModel):
     email: Optional[str] = None
 
 class CreateSessionRequest(BaseModel):
-    user_id: str
-    title: Optional[str] = None
+    user_id: str = Field(..., min_length=1, description="User ID for the session")
+    title: Optional[str] = Field(None, max_length=200, description="Session title (optional, max 200 characters)")
+    
+    @validator('title')
+    def validate_title(cls, v):
+        """Validate session title"""
+        if v is not None:
+            v = v.strip()
+            if not v:
+                return None
+            if len(v) > 200:
+                raise ValueError('Session title must be 200 characters or less')
+        return v
+    
+    @validator('user_id')
+    def validate_user_id(cls, v):
+        """Validate user ID format"""
+        if not v or not v.strip():
+            raise ValueError('User ID is required')
+        return v.strip()
 
 class CreateSessionResponse(BaseModel):
     session_id: str

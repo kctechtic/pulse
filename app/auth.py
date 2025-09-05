@@ -4,7 +4,7 @@ from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from .config import settings
-from .database import get_supabase, verify_password, get_password_hash
+from .database import get_supabase, verify_password, get_password_hash, get_user_by_email_cached, clear_user_cache
 from .models import TokenData
 
 security = HTTPBearer()
@@ -38,30 +38,29 @@ def verify_token(token: str) -> TokenData:
         raise credentials_exception
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """
+    Optimized get_current_user with caching to reduce database calls
+    """
     token = credentials.credentials
     token_data = verify_token(token)
     
-    # Get user from Supabase
-    supabase = get_supabase()
-    try:
-        response = supabase.table("users").select("*").eq("email", token_data.email).execute()
-        
-        if not response.data:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        
-        user = response.data[0]
-        return user
-    except Exception as e:
+    # Use cached user lookup instead of direct database call
+    user = await get_user_by_email_cached(token_data.email)
+    
+    if not user:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database error"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
         )
+    
+    return user
 
 def authenticate_user(email: str, password: str):
+    """
+    Legacy authenticate_user function - kept for backward compatibility
+    Consider using authenticate_user_optimized for new implementations
+    """
     supabase = get_supabase()
     try:
         response = supabase.table("users").select("*").eq("email", email).execute()
@@ -75,3 +74,9 @@ def authenticate_user(email: str, password: str):
         return user
     except Exception:
         return False
+
+async def logout_user(email: str):
+    """
+    Clear user cache on logout for security
+    """
+    clear_user_cache(email)
