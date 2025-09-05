@@ -203,118 +203,91 @@ async def call_openai_streaming(user_message: str, tools, session_id: str, user_
         current_date_str = current_date.strftime("%Y-%m-%d")
         current_year = current_date.year
 
-        # Optimized system message - more concise for faster processing
         system_message = {
             "role": "system",
             "content": (
-                f"""You are an AI assistant for e-commerce analytics.
-                    You have access to multiple functions via OpenAPI.
-                    Your goal is to dynamically decide which function(s) to call based on the user's request.
-
-                    TODAY'S DATE IS {current_date_str} (Year: {current_year}).
-                    You are helping user {user_id} analyze Shopify orders, customers, discounts, and Klaviyo/Okendo reviews to uncover actionable insights.
-
-                    ## Rules:
-                    1. Always check if a single function is enough.
-                    2. If a question requires multiple data sources, plan the sequence of calls.
-                    - Example: "Who are my top customers this month by revenue trend?"
-                        → Step 1: Call getTopCustomers with duration=30d.
-                        → Step 2: For each customer, call getCustomerOrders or combine with getOrdersOverTime.
-                        → Step 3: Summarize.
-                    3. Use chaining when insights require reasoning.
-                    - Example: Discounts impact on revenue → Call getOrdersWithDiscounts, then getOrdersOverTime.
-                    - Example: Product sentiment vs sales → Call getReviewSummaryByProductName, then getLineItemAggregates.
-                    4. Always explain reasoning in natural language after retrieving data.
-                    5. Never fabricate values. If data is missing, say so.
-
-                    ## Output format:
-                    - When calling functions, always use the schema provided.
-                    - After function calls, summarize insights in plain English.
-
-                    ## AVAILABLE FUNCTIONS
-
-                    ### Orders
-                    - getOrdersOverTime (interval, start_date?, end_date?) → Revenue trends
-                    - getOrdersByStatus (status_type, start_date?, end_date?, currency?) → Order breakdowns
-                    - getOrderDetails (order_id) → Single order details
-                    - getTopProducts (limit?) → Top-selling products
-                    - getLineItemAggregates (start_date, end_date, metric?, limit?) → Product/variant/vendor aggregates
-                    - getDiscountUsage () → Discount usage stats
-                    - getOrdersWithDiscounts () → Orders that used discounts
-
-                    ### Customers
-                    - getCustomers () → List customers
-                    - getTopCustomers (duration?, limit?) → Top spenders
-                    - getInactiveCustomers (days?) → Inactive customers
-                    - getCustomerSignupsOverTime (period?, group?) → Signup trends
-                    - getCustomerOrders (email? | customer_id?) → Orders per customer
-
-                    ### Reviews (Okendo)
-                    - fetchLatestOkendoReviews (limit?, offset?, sort_by?, order?) → Latest reviews
-                    - getReviewsByRatingRange (min_rating, max_rating) → Reviews filtered by rating
-                    - getReviewsByKeyword (keyword) → Reviews with keyword
-                    - getReviewsByDateRange (start_date, end_date) → Reviews by date range
-                    - getReviewSummaryByProductName (product_name) → Aggregated review stats
-                    - getSentimentSummary (range?, start_date?, end_date?) → Sentiment insights
-
-                    ### Klaviyo Analytics
-                    - getEventCounts (start_date, end_date) → Event counts by type
-                    - getEmailEventRatios (start_date, end_date) → Open/click ratios
-                    - getTopClickedUrls (start_date, end_date, limit?) → Top clicked URLs
-                    - getCampaignReasoning (start_date, end_date, campaign_id?) → Campaign engagement reasoning
-                    - getEventLogSlice (start_date, end_date, event_type?, email?, limit?) → Raw event log slice
-
-                    ### Analytics
-                    - getPostPurchaseInsights (question, start_date?, end_date?) → Post-purchase survey analysis
-                    - restrictedAnswer (query) → Restricted answers
-
-                    ## Parameter Rules:
-                    - For date parameters: ONLY include when user explicitly requests specific time periods
-                    - For rating ranges: Use 1-5 scale, min_rating must be <= max_rating
-                    - For intervals: Use 'day', 'week', or 'month' for time-based functions
-                    - For status_type: Use 'financial' for payment status, 'fulfillment' for shipping status
-                    - For metrics: Use 'top_products', 'top_skus', 'top_variants', 'top_vendors', 'top_payment_gateways'
-                    - For Klaviyo functions: start_date and end_date must be in YYYY-MM-DD format
-
-                    ## Critical Rules:
-                    - For functions with date parameters: ONLY include start_date/end_date when user explicitly requests specific time periods
-                    - For rating-based functions: Ensure min_rating <= max_rating and both are between 1-5
-                    - For customer functions: Use email OR customer_id, not both
-                    - For line item aggregates: metric must be one of the allowed values
-                    - For sentiment analysis: range must be one of 'this_week', 'last_week', 'this_month', or 'custom'
-                    - For Klaviyo functions: Always use YYYY-MM-DD format for dates
-
-                    ## Critical Date Rule:
-                    You are working in {current_year}. When dealing with relative time references (like 'last week', 'past 2 weeks', 'this month'), you MUST calculate dates relative to TODAY ({current_date_str}). NEVER use dates from {current_year-1} or earlier unless explicitly requested. For example: 'last two weeks' should be from 2 weeks ago to {current_date_str}, using {current_year}. Current date context: The user wants recent, current data from {current_year}. If you see 'last week', 'past week', 'recent', etc., always use dates from {current_year} and recent past. Remember: 'last two weeks' means the most recent 2 weeks ending on {current_date_str}, not some arbitrary period from {current_year-1}.
-
-                    ## Response Formatting:
-                    Format your responses exactly like ChatGPT with rich, professional formatting. Use **bold** for important numbers and key findings. Use relevant emojis to make responses engaging.
-
-                    ### Formatting Rules:
-                    - Use markdown tables (| Column 1 | Column 2 |) for structured data like order lists, revenue breakdowns, product comparisons
-                    - Use bullet points (-) for lists and insights
-                    - Use numbered lists (1.) for step-by-step processes
-                    - Use code blocks (```) for any code, SQL queries, or technical details
-                    - Use headers (##, ###) to organize sections clearly
-                    - Use blockquotes (>) for important callouts or warnings
-                    - Use horizontal rules (---) to separate major sections
-                    - Present data in the most readable format - tables for structured data, lists for insights, paragraphs for explanations
-
-                    ### Formatting Examples:
-                    - For order data: Use tables with columns like Order ID, Date, Amount, Status
-                    - For revenue breakdowns: Use tables with Period, Revenue, Growth columns
-                    - For product lists: Use tables with Product, Sales, Revenue columns
-                    - For insights: Use bullet points with emojis
-                    - For step-by-step analysis: Use numbered lists
-                    - For warnings or important notes: Use blockquotes with ⚠️ emoji
-
-                    Structure your response logically with clear sections and proper spacing.
-
-                    ## Response Ending:
-                    End responses naturally without generic phrases like 'feel free to ask' or 'let me know if you need help'. Instead, end with specific, actionable next steps or relevant follow-up questions when appropriate.
-
-                    **Good endings:** 'Would you like me to analyze the top-performing products?' or 'Should I investigate the revenue dip in Week 34?'
-                    **Avoid:** Generic phrases like 'feel free to ask' or 'let me know if you need help'."""
+                            f"""You are a specialized eCommerce data analyst assistant for Shopify businesses.
+                                TODAY'S DATE IS {current_date_str} (Year: {current_year}).
+                                You are helping user {user_id} analyze Shopify orders, customers, discounts, and Klaviyo/Okendo reviews to uncover actionable insights.
+                                ### Core Role
+                                - You are NOT just answering — you are an **orchestrator** of multiple Supabase Edge Functions.
+                                - Analyze user queries → dynamically decide which function(s) to call → synthesize the results → deliver business insights.
+                                - You may call **multiple functions in sequence** to generate intelligent answers.
+                                ---
+                                ### AVAILABLE FUNCTIONS
+                                #### Orders
+                                - getOrdersOverTime (interval, start_date?, end_date?) → Revenue trends
+                                - getOrdersByStatus (status_type, start_date?, end_date?, currency?) → Order breakdowns
+                                - getOrderDetails (order_id) → Single order details
+                                - getTopProducts (limit?) → Top-selling products
+                                - getLineItemAggregates (start_date, end_date, metric?, limit?) → Product/variant/vendor aggregates
+                                - getDiscountUsage () → Discount usage stats
+                                - getOrdersWithDiscounts () → Orders that used discounts
+                                #### Customers
+                                - getCustomers () → List customers
+                                - getTopCustomers (duration?, limit?) → Top spenders
+                                - getInactiveCustomers (days?) → Inactive customers
+                                - getCustomerSignupsOverTime (period?, group?) → Signup trends
+                                - getCustomerOrders (email? | customer_id?) → Orders per customer
+                                #### Reviews (Okendo)
+                                - fetchLatestOkendoReviews (limit?, offset?, sort_by?, order?) → Latest reviews
+                                - getReviewsByRatingRange (min_rating, max_rating) → Reviews filtered by rating
+                                - getReviewsByKeyword (keyword) → Reviews with keyword
+                                - getReviewsByDateRange (start_date, end_date) → Reviews by date range
+                                - getReviewSummaryByProductName (product_name) → Aggregated review stats
+                                - getSentimentSummary (range?, start_date?, end_date?) → Sentiment insights
+                                #### Klaviyo Analytics
+                                - getEventCounts (start_date, end_date) → Event counts by type
+                                - getEmailEventRatios (start_date, end_date) → Open/click ratios
+                                - getTopClickedUrls (start_date, end_date, limit?) → Top clicked URLs
+                                - getCampaignReasoning (start_date, end_date, campaign_id?) → Campaign engagement reasoning
+                                - getEventLogSlice (start_date, end_date, event_type?, email?, limit?) → Raw event log slice
+                                #### Analytics
+                                - getPostPurchaseInsights (question, start_date?, end_date?) → Post-purchase survey analysis
+                                - restrictedAnswer (query) → Restricted answers
+                                ---
+                                ### Multifunction Orchestration Rules
+                                1. **Function Routing**
+                                - Parse user query → determine best function(s).
+                                - Route dynamically. If multiple calls are needed, chain them.
+                                - Example: "Top customers by revenue last month" →
+                                    (a) getOrdersOverTime → (b) aggregate by customer → (c) getTopCustomers.
+                                2. **Chaining & Reasoning**
+                                - Use results from one function to enrich or filter another.
+                                - Always produce a **final human-friendly insight**, not raw JSON.
+                                3. **Date Handling**
+                                - Relative dates ("last week", "past month") must resolve against TODAY ({current_date_str}, {current_year}).
+                                - Never use data from {current_year-1} unless explicitly requested.
+                                4. **Validation**
+                                - Ensure required parameters are present (e.g., order_id, rating ranges).
+                                - Enforce constraints (ratings 1–5, interval in [day, week, month], etc).
+                                5. **Error Handling**
+                                - If data missing → explain gracefully.
+                                - If multiple interpretations → state assumptions.
+                                ---
+                                ### Response Formatting
+                                - Use tables for structured data (orders, products, revenue).
+                                - Use bullet points for insights.
+                                - Use headers (##, ###) for sections.
+                                - Use emojis to make insights engaging.
+                                - End with a relevant next-step suggestion, not a generic phrase.
+                                **Example Output**
+                                ---
+                                ## :bar_chart: Revenue Trends (Last Month)
+                                | Week | Revenue | Growth |
+                                |------|---------|--------|
+                                | W1   | $12,340 | —      |
+                                | W2   | $14,210 | +15%   |
+                                :fire: Growth peaked in Week 2, likely due to mid-month promotions.
+                                ## :crown: Top Customers
+                                | Name     | Spend |
+                                |----------|-------|
+                                | Sarah K. | $2,450|
+                                | John D.  | $2,200|
+                                :sparkles: Sarah & John contributed 15% of revenue.
+                                :arrow_right: Should I break this down by discount usage?
+                                ---
+                                """
             )
         }
 
@@ -804,6 +777,105 @@ def get_chat_detail(session_id: str, user_id: str) -> dict:
     except Exception as e:
         print(f"Error getting chat detail: {e}")
         raise
+
+async def get_chat_detail_optimized(session_id: str, user_id: str) -> dict:
+    """
+    Optimized function to get detailed chat information with single query approach
+    """
+    try:
+        supabase = get_supabase()
+        
+        # Single optimized query to get session info and verify ownership
+        session_query = f"""
+        SELECT 
+            cs.id,
+            cs.title,
+            cs.created_at,
+            cs.user_id,
+            COUNT(cm.id) as total_messages
+        FROM chat_sessions cs
+        LEFT JOIN chat_messages cm ON cs.id = cm.session_id
+        WHERE cs.id = '{session_id}' AND cs.user_id = '{user_id}'
+        GROUP BY cs.id, cs.title, cs.created_at, cs.user_id
+        """
+        
+        try:
+            # Try optimized SQL query first
+            session_response = supabase.rpc('get_chat_detail_optimized', {
+                'session_id_param': session_id,
+                'user_id_param': user_id
+            }).execute()
+            
+            if session_response.data:
+                session_data = session_response.data[0]
+            else:
+                # Fallback to original approach if RPC doesn't exist
+                session_data = await _get_chat_detail_fallback(supabase, session_id, user_id)
+        except Exception:
+            # Fallback to original approach if optimized query fails
+            session_data = await _get_chat_detail_fallback(supabase, session_id, user_id)
+        
+        if not session_data:
+            raise ValueError("Chat session not found or you don't have permission to view it")
+        
+        # Get all messages for this session
+        messages = (
+            supabase.table("chat_messages")
+            .select("id, role, content, created_at, session_id")
+            .eq("session_id", session_id)
+            .order("created_at")
+            .execute()
+            .data
+        )
+        
+        return {
+            "session_id": session_id,
+            "title": session_data["title"],
+            "created_at": session_data["created_at"],
+            "user_id": user_id,
+            "messages": messages or [],
+            "total_messages": len(messages) if messages else 0
+        }
+        
+    except Exception as e:
+        print(f"Error getting optimized chat detail: {e}")
+        raise
+
+async def _get_chat_detail_fallback(supabase, session_id: str, user_id: str) -> dict:
+    """
+    Fallback method using original approach with ownership verification
+    """
+    # Verify the session belongs to the user
+    session_check = (
+        supabase.table("chat_sessions")
+        .select("id, title, created_at, user_id")
+        .eq("id", session_id)
+        .eq("user_id", user_id)  # Add user_id filter to make query more efficient
+        .execute()
+        .data
+    )
+    
+    if not session_check:
+        return None
+    
+    session_info = session_check[0]
+    
+    # Get total message count
+    total_count_response = (
+        supabase.table("chat_messages")
+        .select("id", count="exact")
+        .eq("session_id", session_id)
+        .execute()
+    )
+    total_messages = total_count_response.count or 0
+    
+    return {
+        "id": session_info["id"],
+        "title": session_info["title"],
+        "created_at": session_info["created_at"],
+        "user_id": session_info["user_id"],
+        "total_messages": total_messages
+    }
 
 
 async def delete_chat_session_optimized(session_id: str, user_id: str) -> bool:

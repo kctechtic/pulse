@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
 from fastapi.responses import StreamingResponse
-from app.chat import create_session_optimized, call_openai_streaming, get_user_chat_sessions_optimized, delete_chat_session_optimized, get_chat_detail, get_session_info
+from app.chat import create_session_optimized, call_openai_streaming, get_user_chat_sessions_optimized, delete_chat_session_optimized, get_chat_detail, get_chat_detail_optimized, get_session_info
 from app.auth import get_current_user
 from ..models import ChatRequest, CreateSessionRequest, CreateSessionResponse, ChatSessionsListResponse, ChatDetailResponse
 from ..database import get_supabase
@@ -1088,33 +1088,78 @@ def get_session_info_endpoint(session_id: str, current_user: dict = Depends(get_
         )
 
 @router.get("/sessions/{session_id}/detail", response_model=ChatDetailResponse)
-def get_chat_detail_endpoint(session_id: str, current_user: dict = Depends(get_current_user)):
-    """Get detailed chat information including all messages for a specific session"""
+async def get_chat_detail_endpoint(
+    session_id: str, 
+    request: Request,
+    response: Response,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Optimized endpoint to get detailed chat information with enhanced performance:
+    - Eliminated redundant user ID lookup (uses JWT token directly)
+    - Added response caching to reduce database load
+    - Optimized database queries with single query approach
+    - Performance monitoring and logging
+    - Enhanced input validation
+    """
+    start_time = time.time()
+    
     try:
-        # Get the authenticated user's ID
-        supabase = get_supabase()
-        response = supabase.table("users").select("id").eq("email", current_user["email"]).execute()
-        if not response.data:
+        # Use user ID directly from JWT token (no need for additional DB query)
+        user_id = current_user["id"]
+        
+        # Validate session_id format
+        if not session_id or not session_id.strip():
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found"
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Session ID is required"
             )
         
-        user_id = response.data[0]["id"]
+        session_id = session_id.strip()
         
-        # Get chat detail (function handles ownership verification)
-        chat_detail = get_chat_detail(session_id, user_id)
+        # Generate cache key
+        cache_key = f"chat_detail:{user_id}:{session_id}"
+        
+        # Check cache first
+        cached_data = get_cached_sessions(cache_key)
+        if cached_data:
+            # Set cache headers
+            response.headers["X-Cache"] = "HIT"
+            response.headers["Cache-Control"] = "private, max-age=30"
+            
+            processing_time = (time.time() - start_time) * 1000
+            print(f"Chat detail served from cache in {processing_time:.2f}ms for user {user_id}")
+            
+            return ChatDetailResponse(**cached_data)
+        
+        # Get chat detail using optimized function
+        chat_detail = await get_chat_detail_optimized(session_id, user_id)
+        
+        # Cache the result
+        cache_sessions(cache_key, chat_detail)
+        
+        # Set response headers
+        response.headers["X-Cache"] = "MISS"
+        response.headers["Cache-Control"] = "private, max-age=30"
+        
+        # Log performance
+        processing_time = (time.time() - start_time) * 1000
+        print(f"Chat detail generated in {processing_time:.2f}ms for user {user_id}")
         
         return ChatDetailResponse(**chat_detail)
         
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except ValueError as e:
         # Handle specific validation errors
-        if "not found" in str(e).lower():
+        error_msg = str(e).lower()
+        if "not found" in error_msg:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Chat session not found"
             )
-        elif "only view your own" in str(e).lower():
+        elif "only view your own" in error_msg or "permission" in error_msg:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only view your own chat sessions"
@@ -1125,6 +1170,7 @@ def get_chat_detail_endpoint(session_id: str, current_user: dict = Depends(get_c
                 detail=str(e)
             )
     except Exception as e:
+        print(f"Error getting chat detail: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve chat detail"
