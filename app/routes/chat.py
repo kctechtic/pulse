@@ -1,14 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
 from fastapi.responses import StreamingResponse
-from app.chat import create_session, create_session_optimized, call_openai, call_openai_optimized, call_openai_streaming, get_user_chat_sessions, get_user_chat_sessions_optimized, delete_chat_session, delete_chat_session_optimized, get_chat_detail, get_session_info
+from app.chat import create_session_optimized, call_openai_streaming, get_user_chat_sessions_optimized, delete_chat_session_optimized, get_chat_detail, get_session_info
 from app.auth import get_current_user
 from ..models import ChatRequest, CreateSessionRequest, CreateSessionResponse, ChatSessionsListResponse, ChatDetailResponse
 from ..database import get_supabase
 import time
-import hashlib
 import json
 import asyncio
-from typing import Dict, Optional, Generator
+from typing import Dict, Optional
 from collections import defaultdict
 from datetime import datetime, timedelta
 
