@@ -678,28 +678,6 @@ tools = [
     {
         "type": "function",
         "function": {
-            "name": "getTopCustomers",
-            "description": "Identify your highest-value customers based on lifetime spend or order count. Use this for VIP customer identification and retention strategies.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "duration": {
-                        "type": "string",
-                        "enum": ["7d", "30d", "90d", "365d"],
-                        "description": "Timeframe for filtering orders (default: last 7 days)"
-                    },
-                    "limit": {
-                        "type": "string",
-                        "enum": ["5", "10"],
-                        "description": "Maximum number of top customers to return"
-                    }
-                }
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "getInactiveCustomers",
             "description": "Find customers who haven't placed an order recently. Helps with re-engagement campaigns and customer lifecycle management.",
             "parameters": {
