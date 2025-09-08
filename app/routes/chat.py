@@ -694,27 +694,6 @@ tools = [
     {
         "type": "function",
         "function": {
-            "name": "getCustomerSignupsOverTime",
-            "description": "Track new customer signups across time periods. Use this for growth analysis and marketing campaign effectiveness.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "period": {
-                        "type": "integer",
-                        "description": "How many days back to include (default: 30)"
-                    },
-                    "group": {
-                        "type": "string",
-                        "enum": ["day", "week", "month"],
-                        "description": "How to group the results (default: day)"
-                    }
-                }
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "getCustomerOrders",
             "description": "Fetch order history for a specific customer. Use this for customer support, order tracking, and customer relationship management.",
             "parameters": {
@@ -728,6 +707,71 @@ tools = [
                     "customer_id": {
                         "type": "string",
                         "description": "The Shopify customer ID (use either email OR customer_id, not both)"
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getCustomersStats",
+            "description": "Get customer statistics such as counts, averages, or raw data. Use this for customer analytics and performance metrics.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "metric": {
+                        "type": "string",
+                        "enum": ["count", "average", "default"],
+                        "description": "The type of metric to return (default: default)"
+                    },
+                    "field": {
+                        "type": "string",
+                        "description": "The field to calculate average on (used only when metric = 'average'). Example: total_spent."
+                    },
+                    "from": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "Start date in YYYY-MM-DD format. Defaults to 7 days ago if not provided."
+                    },
+                    "to": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "End date in YYYY-MM-DD format. Defaults to today if not provided."
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getTopCustomersRepeatFrequency",
+            "description": "Fetch top customers ranked by spend and their repeat order frequency metrics. Use this for customer loyalty analysis and retention insights.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "top_n": {
+                        "type": "integer",
+                        "description": "Number of top customers to return, defaults to 10"
+                    },
+                    "start_date": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "Optional start date filter (YYYY-MM-DD)"
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "Optional end date filter (YYYY-MM-DD)"
+                    },
+                    "customer_emails": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "format": "email"
+                        },
+                        "description": "Optional list of customer emails to restrict results"
                     }
                 }
             }
@@ -765,14 +809,14 @@ tools = [
     {
         "type": "function",
         "function": {
-            "name": "restrictedAnswer",
-            "description": "Return only restricted answers from Supabase. This endpoint queries Supabase and returns ONLY answers that match the restricted domain.",
+            "name": "orchestrator",
+            "description": "Process natural language Shopify analytics query. This is a high-level orchestrator that can route complex queries to appropriate functions and synthesize results.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "The user query that needs to be restricted"
+                        "description": "User's natural language question about Shopify analytics"
                     }
                 },
                 "required": ["query"]

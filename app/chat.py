@@ -29,10 +29,11 @@ SUPABASE_FUNCTIONS = {
     "getOrdersWithDiscounts": "get-orders-with-discounts",
     "getCustomers": "get-customers",
     "getInactiveCustomers": "get-inactive-customers",
-    "getCustomerSignupsOverTime": "get-customer-signups-over-time",
     "getCustomerOrders": "get-customer-orders",
     "getPostPurchaseInsights": "analyze-post-purchase-feedback",
-    "restrictedAnswer": "scope-check",
+    "getCustomersStats": "get-customers-stats",
+    "getTopCustomersRepeatFrequency": "get-top-customers-repeat-frequency",
+    "orchestrator": "orchestrator",
     # Klaviyo Event Analytics Functions
     "getEventCounts": "get-event-counts",
     "getEmailEventRatios": "get-email-click-ratio",
@@ -48,7 +49,7 @@ HTTP_METHODS = {
     "fetchLatestOkendoReviews": "GET",
     "getReviewsByRatingRange": "GET",
     "getReviewsByKeyword": "GET",
-    "getReviewsByDateRange": "GET",
+    "getReviewsByDateRange": "POST",
     "getReviewSummaryByProductName": "GET",
     "getSentimentSummary": "POST",
     "getOrderDetails": "POST",
@@ -58,10 +59,11 @@ HTTP_METHODS = {
     "getOrdersWithDiscounts": "GET",
     "getCustomers": "GET",
     "getInactiveCustomers": "GET",
-    "getCustomerSignupsOverTime": "GET",
     "getCustomerOrders": "GET",
     "getPostPurchaseInsights": "POST",
-    "restrictedAnswer": "POST",
+    "getCustomersStats": "POST",
+    "getTopCustomersRepeatFrequency": "POST",
+    "orchestrator": "POST",
     # Klaviyo Event Analytics Functions
     "getEventCounts": "POST",
     "getEmailEventRatios": "POST",
@@ -232,8 +234,9 @@ async def call_openai_streaming(user_message: str, tools, session_id: str, user_
                                                 #### Customers
                                                 - getCustomers () → List customers
                                                 - getInactiveCustomers (days?) → Inactive customers
-                                                - getCustomerSignupsOverTime (period?, group?) → Signup trends
                                                 - getCustomerOrders (email? | customer_id?) → Orders per customer
+                                                - getCustomersStats (metric?, field?, from?, to?) → Customer statistics
+                                                - getTopCustomersRepeatFrequency (top_n?, start_date?, end_date?, customer_emails?) → Top customers with repeat frequency
                                                 #### Reviews (Okendo)
                                                 - fetchLatestOkendoReviews (limit?, offset?, sort_by?, order?) → Latest reviews
                                                 - getReviewsByRatingRange (min_rating, max_rating) → Reviews filtered by rating
@@ -249,7 +252,7 @@ async def call_openai_streaming(user_message: str, tools, session_id: str, user_
                                                 - getEventLogSlice (start_date, end_date, event_type?, email?, limit?) → Raw event log slice
                                                 #### Analytics
                                                 - getPostPurchaseInsights (question, start_date?, end_date?) → Post-purchase survey analysis
-                                                - restrictedAnswer (query) → Restricted answers
+                                                - orchestrator (query) → Process natural language Shopify analytics query
                                                 ---
                                                 ### Multifunction Orchestration Rules
                                                 1. **Function Routing**
