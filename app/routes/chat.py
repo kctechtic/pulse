@@ -8,7 +8,6 @@ import time
 import json
 import asyncio
 from typing import Dict, Optional
-from collections import defaultdict
 from datetime import datetime, timedelta
 
 router = APIRouter(prefix="/chat", tags=["chatbot"])
@@ -18,8 +17,9 @@ _sessions_cache: Dict[str, Dict] = {}
 _sessions_cache_ttl = 60  # 1 minute cache TTL for sessions
 
 # Rate limiting for session creation
-_session_creation_attempts: Dict[str, list] = defaultdict(list)
 _max_session_creation_per_hour = 20
+
+# Note: Rate limiting now counts existing sessions, not creation attempts
 
 def generate_sessions_cache_key(user_id: str, page: int, pagination: int) -> str:
     """Generate cache key for sessions list"""
@@ -52,26 +52,100 @@ def clear_sessions_cache(user_id: str = None):
     else:
         _sessions_cache.clear()
 
-def check_session_creation_rate_limit(user_id: str) -> bool:
+
+async def check_session_creation_rate_limit(user_id: str) -> bool:
     """
-    Check if user has exceeded rate limit for session creation
+    Check if user has exceeded rate limit for session creation by counting existing sessions.
+    This counts currently existing sessions created in the last hour, not creation attempts.
+    When a session is deleted, it frees up a slot for creating a new session.
     """
-    now = datetime.now()
-    hour_ago = now - timedelta(hours=1)
-    
-    # Clean old attempts
-    _session_creation_attempts[user_id] = [
-        attempt_time for attempt_time in _session_creation_attempts[user_id]
-        if attempt_time > hour_ago
-    ]
-    
-    # Check if under limit
-    if len(_session_creation_attempts[user_id]) >= _max_session_creation_per_hour:
-        return False
-    
-    # Record this attempt
-    _session_creation_attempts[user_id].append(now)
-    return True
+    try:
+        supabase = get_supabase()
+        
+        # Get all sessions for this user in the last hour using a more robust approach
+        # First, get current timestamp and calculate 1 hour ago
+        now = datetime.now()
+        hour_ago = now - timedelta(hours=1)
+        
+        # Try multiple datetime formats to ensure compatibility
+        formats_to_try = [
+            hour_ago.strftime("%Y-%m-%dT%H:%M:%S"),
+            hour_ago.strftime("%Y-%m-%d %H:%M:%S"),
+            hour_ago.isoformat(),
+            hour_ago.strftime("%Y-%m-%dT%H:%M:%S.%f")
+        ]
+        
+        recent_sessions_count = 0
+        
+        for fmt in formats_to_try:
+            try:
+                response = (
+                    supabase.table("chat_sessions")
+                    .select("id", count="exact")
+                    .eq("user_id", user_id)
+                    .gte("created_at", fmt)
+                    .execute()
+                )
+                
+                count = response.count or 0
+                
+                if count > 0:
+                    recent_sessions_count = count
+                    break
+                    
+            except Exception:
+                continue
+        
+        # If all formats failed, try a different approach - get all recent sessions and filter in Python
+        if recent_sessions_count == 0:
+            all_recent = (
+                supabase.table("chat_sessions")
+                .select("id, created_at")
+                .eq("user_id", user_id)
+                .gte("created_at", (now - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S"))
+                .order("created_at", desc=True)
+                .limit(50)
+                .execute()
+            )
+            
+            if all_recent.data:
+                recent_sessions_count = 0
+                for session in all_recent.data:
+                    try:
+                        session_time = datetime.fromisoformat(session['created_at'].replace('Z', ''))
+                        if session_time >= hour_ago:
+                            recent_sessions_count += 1
+                    except Exception:
+                        continue
+        
+        # Additional safety check: if we still can't get a proper count, use a simpler approach
+        if recent_sessions_count == 0:
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            
+            today_response = (
+                supabase.table("chat_sessions")
+                .select("id", count="exact")
+                .eq("user_id", user_id)
+                .gte("created_at", today_start.strftime("%Y-%m-%dT%H:%M:%S"))
+                .execute()
+            )
+            
+            today_count = today_response.count or 0
+            
+            # If user has more than 20 existing sessions created today, apply rate limit
+            if today_count >= _max_session_creation_per_hour:
+                return False
+        
+        # Check if under limit
+        if recent_sessions_count >= _max_session_creation_per_hour:
+            return False
+        else:
+            return True
+        
+    except Exception as e:
+        print(f"❌ Error checking session creation rate limit: {e}")
+        # If there's an error, allow the request to proceed (fail open)
+        return True
 
 
 @router.get("/sessions", response_model=ChatSessionsListResponse)
@@ -79,7 +153,7 @@ async def get_chat_sessions(
     request: Request,
     response: Response,
     page: int = 1, 
-    pagination: int = 10, 
+    pagination: int = 20, 
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -114,13 +188,18 @@ async def get_chat_sessions(
             processing_time = (time.time() - start_time) * 1000
             print(f"Sessions served from cache in {processing_time:.2f}ms for user {user_id}")
             
-            return ChatSessionsListResponse(**cached_data)
+            # Ensure user_id is included in cached data for validation
+            cached_data_with_user_id = {**cached_data, "user_id": user_id}
+            return ChatSessionsListResponse(**cached_data_with_user_id)
         
         # Get paginated chat sessions using optimized function
         result = await get_user_chat_sessions_optimized(user_id, page, pagination)
         
+        # Add user_id to result for caching
+        result_with_user_id = {**result, "user_id": user_id}
+        
         # Cache the result
-        cache_sessions(cache_key, result)
+        cache_sessions(cache_key, result_with_user_id)
         
         # Set response headers
         response.headers["X-Cache"] = "MISS"
@@ -130,18 +209,10 @@ async def get_chat_sessions(
         processing_time = (time.time() - start_time) * 1000
         print(f"Sessions generated in {processing_time:.2f}ms for user {user_id} (page {page})")
         
-        return ChatSessionsListResponse(
-            user_id=user_id,
-            sessions=result["sessions"],
-            total_sessions=result["total_sessions"],
-            page=result["page"],
-            pagination=result["pagination"],
-            total_pages=result["total_pages"],
-            has_next=result["has_next"],
-            has_prev=result["has_prev"]
-        )
+        return ChatSessionsListResponse(**result_with_user_id)
         
     except Exception as e:
+        print(f"Error retrieving chat sessions: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve chat sessions"
@@ -324,7 +395,7 @@ async def create_chat(
             )
         
         # Check rate limit for session creation
-        if not check_session_creation_rate_limit(authenticated_user_id):
+        if not await check_session_creation_rate_limit(authenticated_user_id):
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Too many session creation attempts. Please try again later."
