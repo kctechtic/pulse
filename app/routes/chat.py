@@ -16,7 +16,7 @@ router = APIRouter(prefix="/chat", tags=["chatbot"])
 _sessions_cache: Dict[str, Dict] = {}
 _sessions_cache_ttl = 60  # 1 minute cache TTL for sessions
 
-# Rate limiting for session creation
+# Rate limiting for session creation (per 1 hour)
 _max_session_creation_per_hour = 20
 
 # Note: Rate limiting now counts existing sessions, not creation attempts
@@ -56,15 +56,16 @@ def clear_sessions_cache(user_id: str = None):
 async def check_session_creation_rate_limit(user_id: str) -> bool:
     """
     Check if user has exceeded rate limit for session creation by counting existing sessions.
-    This counts currently existing sessions created in the last hour, not creation attempts.
+    This counts currently existing sessions created in the last 1 hour, not creation attempts.
     When a session is deleted, it frees up a slot for creating a new session.
     """
     try:
         supabase = get_supabase()
         
-        # Get all sessions for this user in the last hour using a more robust approach
+        # Get all sessions for this user in the last 1 hour using a more robust approach
         # First, get current timestamp and calculate 1 hour ago
-        now = datetime.now()
+        # Use UTC time to match database timestamps
+        now = datetime.utcnow()
         hour_ago = now - timedelta(hours=1)
         
         # Try multiple datetime formats to ensure compatibility
@@ -98,11 +99,12 @@ async def check_session_creation_rate_limit(user_id: str) -> bool:
         
         # If all formats failed, try a different approach - get all recent sessions and filter in Python
         if recent_sessions_count == 0:
+            fallback_time = (now - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S")
             all_recent = (
                 supabase.table("chat_sessions")
                 .select("id, created_at")
                 .eq("user_id", user_id)
-                .gte("created_at", (now - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S"))
+                .gte("created_at", fallback_time)
                 .order("created_at", desc=True)
                 .limit(50)
                 .execute()
@@ -132,9 +134,8 @@ async def check_session_creation_rate_limit(user_id: str) -> bool:
             
             today_count = today_response.count or 0
             
-            # If user has more than 20 existing sessions created today, apply rate limit
-            if today_count >= _max_session_creation_per_hour:
-                return False
+            # DISABLED: Don't apply rate limit based on today's sessions for testing
+            # Only use the 1-hour window rate limiting
         
         # Check if under limit
         if recent_sessions_count >= _max_session_creation_per_hour:

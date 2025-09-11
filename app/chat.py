@@ -696,7 +696,8 @@ async def _get_sessions_fallback(supabase, user_id: str, pagination: int, offset
         .select("id, title, created_at")
         .eq("user_id", user_id)
         .order("created_at", desc=True)
-        .range(offset, offset + pagination - 1)
+        .limit(pagination)
+        .offset(offset)
         .execute()
         .data
     )
