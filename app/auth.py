@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from .config import settings
 from .database import get_supabase, verify_password, get_password_hash, get_user_by_email_cached, clear_user_cache
@@ -37,31 +37,44 @@ def verify_token(token: str) -> TokenData:
     except JWTError:
         raise credentials_exception
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+async def get_current_user_internal(credentials: HTTPAuthorizationCredentials = Depends(security), request: Request = None):
     """
-    Optimized get_current_user with caching to reduce database calls
+    Internal function for get_current_user with domain validation
     """
     token = credentials.credentials
     token_data = verify_token(token)
     
+    # Extract domain from request
+    domain = request.headers.get("host") if request else None
+    
     # Use cached user lookup instead of direct database call
-    user = await get_user_by_email_cached(token_data.email)
+    user = await get_user_by_email_cached(token_data.email, domain)
     
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
+            detail="User not found or invalid domain",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
     return user
 
-def authenticate_user(email: str, password: str):
+async def get_current_user(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """
+    Public function for get_current_user that automatically includes domain validation
+    """
+    return await get_current_user_internal(credentials, request)
+
+def get_domain_from_request(request: Request) -> str:
+    """Helper function to extract domain from request headers"""
+    return request.headers.get("host")
+
+def authenticate_user(email: str, password: str, domain: str = None):
     """
     Legacy authenticate_user function - kept for backward compatibility
     Consider using authenticate_user_optimized for new implementations
     """
-    supabase = get_supabase()
+    supabase = get_supabase(domain)
     try:
         response = supabase.table("users").select("*").eq("email", email).execute()
         if not response.data:
@@ -75,8 +88,8 @@ def authenticate_user(email: str, password: str):
     except Exception:
         return False
 
-async def logout_user(email: str):
+async def logout_user(email: str, domain: str = None):
     """
     Clear user cache on logout for security
     """
-    clear_user_cache(email)
+    clear_user_cache(email, domain)

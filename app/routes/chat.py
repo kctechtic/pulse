@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
 from fastapi.responses import StreamingResponse
 from app.chat import create_session_optimized, call_openai_streaming, get_user_chat_sessions_optimized, delete_chat_session_optimized, get_chat_detail, get_chat_detail_optimized, get_session_info
-from app.auth import get_current_user
+from app.auth import get_current_user, get_domain_from_request
 from ..models import ChatRequest, CreateSessionRequest, CreateSessionResponse, ChatSessionsListResponse, ChatDetailResponse
 from ..database import get_supabase
 import time
@@ -53,14 +53,14 @@ def clear_sessions_cache(user_id: str = None):
         _sessions_cache.clear()
 
 
-async def check_session_creation_rate_limit(user_id: str) -> bool:
+async def check_session_creation_rate_limit(user_id: str, domain: str = None) -> bool:
     """
     Check if user has exceeded rate limit for session creation by counting existing sessions.
     This counts currently existing sessions created in the last 1 hour, not creation attempts.
     When a session is deleted, it frees up a slot for creating a new session.
     """
     try:
-        supabase = get_supabase()
+        supabase = get_supabase(domain)
         
         # Get all sessions for this user in the last 1 hour using a more robust approach
         # First, get current timestamp and calculate 1 hour ago
@@ -193,8 +193,9 @@ async def get_chat_sessions(
             cached_data_with_user_id = {**cached_data, "user_id": user_id}
             return ChatSessionsListResponse(**cached_data_with_user_id)
         
-        # Get paginated chat sessions using optimized function
-        result = await get_user_chat_sessions_optimized(user_id, page, pagination)
+        # Extract domain and get paginated chat sessions using optimized function
+        domain = get_domain_from_request(request)
+        result = await get_user_chat_sessions_optimized(user_id, page, pagination, domain)
         
         # Add user_id to result for caching
         result_with_user_id = {**result, "user_id": user_id}
@@ -248,8 +249,9 @@ async def delete_chat_session_endpoint(
         
         session_id = session_id.strip()
         
-        # Delete the session using optimized function
-        success = await delete_chat_session_optimized(session_id, user_id)
+        # Extract domain and delete the session using optimized function
+        domain = get_domain_from_request(request)
+        success = await delete_chat_session_optimized(session_id, user_id, domain)
         
         if not success:
             raise HTTPException(
@@ -326,6 +328,7 @@ async def bulk_delete_sessions(
             )
         
         user_id = current_user["id"]
+        domain = get_domain_from_request(request)
         deleted_sessions = []
         failed_sessions = []
         
@@ -336,7 +339,7 @@ async def bulk_delete_sessions(
                     failed_sessions.append({"session_id": session_id, "error": "Invalid session ID"})
                     continue
                 
-                success = await delete_chat_session_optimized(session_id.strip(), user_id)
+                success = await delete_chat_session_optimized(session_id.strip(), user_id, domain)
                 if success:
                     deleted_sessions.append(session_id)
                 else:
@@ -395,8 +398,9 @@ async def create_chat(
                 detail="User ID mismatch - you can only create sessions for yourself"
             )
         
-        # Check rate limit for session creation
-        if not await check_session_creation_rate_limit(authenticated_user_id):
+        # Extract domain and check rate limit for session creation
+        domain = get_domain_from_request(request)
+        if not await check_session_creation_rate_limit(authenticated_user_id, domain):
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Too many session creation attempts. Please try again later."
@@ -412,7 +416,7 @@ async def create_chat(
                 )
         
         # Create session using optimized function
-        session = await create_session_optimized(req.user_id, req.title)
+        session = await create_session_optimized(req.user_id, req.title, domain)
         
         # Clear sessions cache for this user since we added a new session
         clear_sessions_cache(authenticated_user_id)
@@ -1090,8 +1094,9 @@ async def chat(
                 start_event = f"data: {json.dumps({'type': 'start', 'timestamp': datetime.now().isoformat()})}\n\n"
                 yield start_event
                 
-                # Process chat message using streaming function
-                async for chunk in call_openai_streaming(req.message, tools, req.session_id, req.user_id):
+                # Extract domain and process chat message using streaming function
+                domain = get_domain_from_request(request)
+                async for chunk in call_openai_streaming(req.message, tools, req.session_id, req.user_id, domain):
                     chunk_data = f"data: {json.dumps(chunk)}\n\n"
                     yield chunk_data
                     # Force immediate flush for real-time streaming
@@ -1133,11 +1138,14 @@ async def chat(
         )
 
 @router.get("/sessions/{session_id}/info")
-def get_session_info_endpoint(session_id: str, current_user: dict = Depends(get_current_user)):
+def get_session_info_endpoint(session_id: str, request: Request, current_user: dict = Depends(get_current_user)):
     """Get basic session information including updated title"""
     try:
+        # Extract domain from request
+        domain = get_domain_from_request(request)
+        
         # Get the authenticated user's ID
-        supabase = get_supabase()
+        supabase = get_supabase(domain)
         response = supabase.table("users").select("id").eq("email", current_user["email"]).execute()
         if not response.data:
             raise HTTPException(
@@ -1148,7 +1156,7 @@ def get_session_info_endpoint(session_id: str, current_user: dict = Depends(get_
         user_id = response.data[0]["id"]
         
         # Get session info (function handles ownership verification)
-        session_info = get_session_info(session_id)
+        session_info = get_session_info(session_id, domain)
         
         # Verify ownership
         if session_info["user_id"] != user_id:
@@ -1226,8 +1234,9 @@ async def get_chat_detail_endpoint(
             
             return ChatDetailResponse(**cached_data)
         
-        # Get chat detail using optimized function
-        chat_detail = await get_chat_detail_optimized(session_id, user_id)
+        # Extract domain and get chat detail using optimized function
+        domain = get_domain_from_request(request)
+        chat_detail = await get_chat_detail_optimized(session_id, user_id, domain)
         
         # Cache the result
         cache_sessions(cache_key, chat_detail)

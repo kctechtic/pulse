@@ -73,7 +73,7 @@ HTTP_METHODS = {
 }
 
 
-async def create_session_optimized(user_id: str, title: str = None) -> dict:
+async def create_session_optimized(user_id: str, title: str = None, domain: str = None) -> dict:
     """
     Optimized session creation with enhanced validation and error handling
     """
@@ -89,7 +89,7 @@ async def create_session_optimized(user_id: str, title: str = None) -> dict:
             if not title:
                 title = None
         
-        supabase = get_supabase()
+        supabase = get_supabase(domain)
         
         # Create session with optimized insert
         session_data = {
@@ -108,10 +108,10 @@ async def create_session_optimized(user_id: str, title: str = None) -> dict:
         print(f"Failed to create session: {str(e)}")
         raise
 
-def get_session_info(session_id: str) -> dict:
+def get_session_info(session_id: str, domain: str = None) -> dict:
     """Get basic session information by ID"""
     try:
-        supabase = get_supabase()
+        supabase = get_supabase(domain)
         session = (
             supabase.table("chat_sessions")
             .select("id, title, created_at, user_id")
@@ -129,7 +129,7 @@ def get_session_info(session_id: str) -> dict:
         print(f"Error getting session info: {e}")
         raise
 
-def update_chat_title(session_id: str, user_message: str):
+def update_chat_title(session_id: str, user_message: str, domain: str = None):
     """Generate and update chat title based on first user message"""
     try:
         # Generate a title using OpenAI
@@ -163,7 +163,7 @@ def update_chat_title(session_id: str, user_message: str):
             generated_title = "New Chat"
         
         # Update the session title in the database
-        supabase = get_supabase()
+        supabase = get_supabase(domain)
         supabase.table("chat_sessions").update({
             "title": generated_title
         }).eq("id", session_id).execute()
@@ -175,7 +175,7 @@ def update_chat_title(session_id: str, user_message: str):
         # If title generation fails, use a fallback
         fallback_title = user_message[:30] + "..." if len(user_message) > 30 else user_message
         try:
-            supabase = get_supabase()
+            supabase = get_supabase(domain)
             supabase.table("chat_sessions").update({
                 "title": fallback_title
             }).eq("id", session_id).execute()
@@ -184,19 +184,19 @@ def update_chat_title(session_id: str, user_message: str):
         return fallback_title
 
 
-async def call_openai_streaming(user_message: str, tools, session_id: str, user_id: str):
+async def call_openai_streaming(user_message: str, tools, session_id: str, user_id: str, domain: str = None):
     """
     Streaming OpenAI API call function for real-time responses
     """
     try:
         # Get chat history asynchronously
-        history = get_history(session_id)
+        history = get_history(session_id, domain)
         messages = [{"role": msg["role"], "content": msg["content"]} for msg in history]
 
         # Check if this is the first message and generate title if needed
         if len(history) == 0:
             # This is the first message, generate a title asynchronously
-            update_chat_title(session_id, user_message)
+            update_chat_title(session_id, user_message, domain)
 
         # Get current date for context
         current_date = datetime.now()
@@ -317,7 +317,7 @@ async def call_openai_streaming(user_message: str, tools, session_id: str, user_
         ]
         
         # Save user message
-        save_message(session_id, "user", user_message)
+        save_message(session_id, "user", user_message, domain)
 
         # Call OpenAI with streaming
         stream = client.chat.completions.create(
@@ -331,16 +331,16 @@ async def call_openai_streaming(user_message: str, tools, session_id: str, user_
         )
 
         # Handle streaming response
-        async for chunk in handle_openai_streaming_response(stream, session_id, openai_messages):
+        async for chunk in handle_openai_streaming_response(stream, session_id, openai_messages, domain):
             yield chunk
 
     except Exception as e:
         error_msg = f"Error in call_openai_streaming: {str(e)}"
         print(error_msg)
-        save_message(session_id, "assistant", error_msg)
+        save_message(session_id, "assistant", error_msg, domain)
         yield {"type": "error", "content": error_msg}
 
-async def handle_openai_streaming_response(stream, session_id: str, messages: list):
+async def handle_openai_streaming_response(stream, session_id: str, messages: list, domain: str = None):
     """
     Handle streaming response from OpenAI API
     """
@@ -452,7 +452,7 @@ async def handle_openai_streaming_response(stream, session_id: str, messages: li
                 print(f"\n=== FINAL CHAT RESPONSE ===")
                 print(final_content)
                 print("=" * 50)
-                save_message(session_id, "assistant", final_content)
+                save_message(session_id, "assistant", final_content, domain)
         
         else:
             # No tool calls, just save the accumulated content
@@ -461,14 +461,14 @@ async def handle_openai_streaming_response(stream, session_id: str, messages: li
                 print(f"\n=== FINAL CHAT RESPONSE (NO TOOL CALLS) ===")
                 print(accumulated_content)
                 print("=" * 50)
-                save_message(session_id, "assistant", accumulated_content)
+                save_message(session_id, "assistant", accumulated_content, domain)
     
     except Exception as e:
         error_msg = f"Error handling streaming response: {str(e)}"
         print(f"\n=== CHAT ERROR ===")
         print(error_msg)
         print("=" * 50)
-        save_message(session_id, "assistant", error_msg)
+        save_message(session_id, "assistant", error_msg, domain)
         yield {"type": "error", "content": error_msg}
 
 
@@ -550,13 +550,13 @@ def call_supabase_edge(fn_name: str, args: dict) -> dict:
         print("=" * 80)
         return {"error": error_msg}
 
-def save_message(session_id: str, role: str, content: str):
+def save_message(session_id: str, role: str, content: str, domain: str = None):
     """Save message to database"""
     try:
         if not content or content.strip() == "":
             content = "Empty message"
         
-        supabase = get_supabase()
+        supabase = get_supabase(domain)
         supabase.table("chat_messages").insert({
             "session_id": session_id,
             "role": role,
@@ -565,10 +565,10 @@ def save_message(session_id: str, role: str, content: str):
     except Exception as e:
         print(f"Error saving message: {e}")
 
-def get_history(session_id: str) -> list:
+def get_history(session_id: str, domain: str = None) -> list:
     """Get chat history for a session"""
     try:
-        supabase = get_supabase()
+        supabase = get_supabase(domain)
         history = (
             supabase.table("chat_messages")
             .select("*")
@@ -582,12 +582,12 @@ def get_history(session_id: str) -> list:
         print(f"Error getting history: {e}")
         return []
 
-async def get_user_chat_sessions_optimized(user_id: str, page: int = 1, pagination: int = 10) -> dict:
+async def get_user_chat_sessions_optimized(user_id: str, page: int = 1, pagination: int = 10, domain: str = None) -> dict:
     """
     Optimized function to get paginated chat sessions with single query approach
     """
     try:
-        supabase = get_supabase()
+        supabase = get_supabase(domain)
         
         # Calculate offset for pagination
         offset = (page - 1) * pagination
@@ -758,10 +758,10 @@ async def _get_sessions_fallback(supabase, user_id: str, pagination: int, offset
     return sessions
 
 
-def get_chat_detail(session_id: str, user_id: str) -> dict:
+def get_chat_detail(session_id: str, user_id: str, domain: str = None) -> dict:
     """Get detailed chat information including all messages for a specific session"""
     try:
-        supabase = get_supabase()
+        supabase = get_supabase(domain)
         
         # First verify the session belongs to the user
         session_check = (
@@ -803,12 +803,12 @@ def get_chat_detail(session_id: str, user_id: str) -> dict:
         print(f"Error getting chat detail: {e}")
         raise
 
-async def get_chat_detail_optimized(session_id: str, user_id: str) -> dict:
+async def get_chat_detail_optimized(session_id: str, user_id: str, domain: str = None) -> dict:
     """
     Optimized function to get detailed chat information with single query approach
     """
     try:
-        supabase = get_supabase()
+        supabase = get_supabase(domain)
         
         # Single optimized query to get session info and verify ownership
         session_query = f"""
@@ -903,7 +903,7 @@ async def _get_chat_detail_fallback(supabase, session_id: str, user_id: str) -> 
     }
 
 
-async def delete_chat_session_optimized(session_id: str, user_id: str) -> bool:
+async def delete_chat_session_optimized(session_id: str, user_id: str, domain: str = None) -> bool:
     """
     Optimized session deletion with enhanced validation and error handling
     """
@@ -917,7 +917,7 @@ async def delete_chat_session_optimized(session_id: str, user_id: str) -> bool:
         session_id = session_id.strip()
         user_id = user_id.strip()
         
-        supabase = get_supabase()
+        supabase = get_supabase(domain)
         
         # Single query to verify ownership and get session info
         session_check = (

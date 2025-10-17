@@ -6,8 +6,8 @@ app = FastAPI(
     title="Pacer CIL Chatbot",
     description="A FastAPI application with OpenAI GPT-4 integration and Supabase Edge Functions",
     version="1.0.0",
-    docs_url=None, 
-    redoc_url=None
+    # docs_url=None, 
+    # redoc_url=None
 )
 
 # CORS middleware

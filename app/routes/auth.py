@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
 from fastapi.responses import JSONResponse
 from ..models import UserCreate, UserLogin, UserResponse, Token
 from ..database import get_supabase, get_password_hash, authenticate_user_optimized, register_user_optimized, check_user_exists
-from ..auth import create_access_token, get_current_user, logout_user
+from ..auth import create_access_token, get_current_user, logout_user, get_domain_from_request
 from datetime import timedelta
 from ..config import settings
 import time
@@ -92,37 +92,51 @@ async def register(user: UserCreate, request: Request):
     - Rate limiting protection
     - Better error handling and security
     - Reduced response time
+    - Domain-based Supabase configuration
     """
     start_time = time.time()
     
-    # Get client IP for rate limiting
-    client_ip = request.client.host if request.client else "unknown"
-    
-    # Check rate limit
-    if not check_rate_limit(client_ip):
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many registration attempts. Please try again later."
-        )
-    
     try:
-        # Use optimized registration function
+        # Extract domain from request headers
+        domain = get_domain_from_request(request)
+        print(f"🚀 Registration attempt - Email: {user.email}, Domain: {domain}")
+        
+        # Get client IP for rate limiting
+        client_ip = request.client.host if request.client else "unknown"
+        print(f"📊 Client IP: {client_ip}")
+        
+        # Check rate limit
+        if not check_rate_limit(client_ip):
+            print(f"⚠️  Rate limit exceeded for IP: {client_ip}")
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many registration attempts. Please try again later."
+            )
+        
+        print(f"✅ Rate limit check passed")
+        
+        # Use optimized registration function with domain support
+        print(f"📝 Attempting to register user in domain: {domain}")
         created_user = await register_user_optimized(
             email=user.email,
             password=user.password,
             first_name=user.first_name,
-            last_name=user.last_name
+            last_name=user.last_name,
+            domain=domain
         )
         
         if not created_user:
+            print(f"❌ Registration failed - Email already exists: {user.email}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Email already registered"
             )
         
+        print(f"✅ User registered successfully: {created_user.get('email', 'N/A')} (ID: {created_user.get('id', 'N/A')})")
+        
         # Log registration time for monitoring
         registration_time = (time.time() - start_time) * 1000
-        print(f"Registration completed in {registration_time:.2f}ms for {user.email}")
+        print(f"⏱️  Registration completed in {registration_time:.2f}ms for {user.email}")
         
         return UserResponse(
             id=created_user["id"],
@@ -138,34 +152,61 @@ async def register(user: UserCreate, request: Request):
         raise
     except Exception as e:
         # Log the actual error for debugging (in production, use proper logging)
-        print(f"Registration error: {str(e)}")
+        print(f"💥 Registration error for {user.email}: {str(e)}")
+        print(f"💥 Error type: {type(e).__name__}")
+        import traceback
+        print(f"💥 Full traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create user. Please try again."
         )
 
 @router.post("/login", response_model=Token)
-async def login(user_credentials: UserLogin):
+async def login(user_credentials: UserLogin, request: Request):
     """
     Optimized login endpoint with improved performance:
     - Single database call for authentication
     - Async operations for better concurrency
     - Reduced response time
+    - Domain-based Supabase configuration
     """
-    user = await authenticate_user_optimized(user_credentials.email, user_credentials.password)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
-            headers={"WWW-Authenticate": "Bearer"},
+    try:
+        # Extract domain from request headers
+        domain = get_domain_from_request(request)
+        print(f"🚀 Login attempt - Email: {user_credentials.email}, Domain: {domain}")
+        
+        user = await authenticate_user_optimized(user_credentials.email, user_credentials.password, domain)
+        
+        if not user:
+            print(f"❌ Login failed - Authentication returned None for email: {user_credentials.email}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect email or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        print(f"✅ Login successful - Creating token for user: {user.get('email', 'N/A')}")
+        
+        access_token_expires = timedelta(minutes=settings.jwt_expire_minutes)
+        access_token = create_access_token(
+            data={"sub": user["email"]}, expires_delta=access_token_expires
         )
-    
-    access_token_expires = timedelta(minutes=settings.jwt_expire_minutes)
-    access_token = create_access_token(
-        data={"sub": user["email"]}, expires_delta=access_token_expires
-    )
-    
-    return {"access_token": access_token, "token_type": "bearer"}
+        
+        print(f"✅ Token created successfully")
+        return {"access_token": access_token, "token_type": "bearer"}
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        print(f"💥 Login endpoint error: {str(e)}")
+        print(f"💥 Error type: {type(e).__name__}")
+        import traceback
+        print(f"💥 Full traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Login failed due to server error",
+        )
 
 @router.get("/me")
 async def get_user_profile(
@@ -242,11 +283,12 @@ async def verify_token_validity(current_user: dict = Depends(get_current_user)):
     return {"valid": True, "user_id": current_user["id"]}
 
 @router.post("/logout")
-async def logout(current_user: dict = Depends(get_current_user)):
+async def logout(request: Request, current_user: dict = Depends(get_current_user)):
     """
     Logout endpoint that clears user cache for security
     """
-    await logout_user(current_user["email"])
+    domain = request.headers.get("host")
+    await logout_user(current_user["email"], domain)
     # Clear profile cache on logout
     clear_user_profile_cache(current_user["id"])
     return {"message": "Successfully logged out"}
@@ -273,8 +315,9 @@ async def update_user_profile(
                 detail="No valid fields to update"
             )
         
-        # Update user in database
-        supabase = get_supabase()
+        # Extract domain and update user in database
+        domain = get_domain_from_request(request)
+        supabase = get_supabase(domain)
         response = supabase.table("users").update(filtered_data).eq("id", current_user["id"]).execute()
         
         if not response.data:
