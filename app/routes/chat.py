@@ -10,6 +10,24 @@ import asyncio
 from typing import Dict, Optional
 from datetime import datetime, timedelta
 
+async def validate_session_ownership(session_id: str, user_id: str, domain: str) -> bool:
+    """
+    Validate that the session belongs to the user in the correct domain
+    """
+    try:
+        supabase = get_supabase(domain)
+        
+        # Check if session exists and belongs to the user in this domain
+        response = supabase.table("chat_sessions").select("id, user_id").eq("id", session_id).eq("user_id", user_id).execute()
+        
+        if not response.data:
+            return False
+        
+        return True
+    except Exception as e:
+        print(f"Error validating session ownership: {e}")
+        return False
+
 router = APIRouter(prefix="/chat", tags=["chatbot"])
 
 # Cache for sessions list responses
@@ -1072,6 +1090,16 @@ async def chat(
                 detail="Message content is required"
             )
         
+        # Extract domain and validate session ownership
+        domain = get_domain_from_request(request)
+        
+        # Validate that the session belongs to the user in the correct domain
+        if not await validate_session_ownership(req.session_id, authenticated_user_id, domain):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Session not found or does not belong to you in this domain"
+            )
+        
         # Validate session_id
         if not req.session_id or not req.session_id.strip():
             raise HTTPException(
@@ -1094,8 +1122,7 @@ async def chat(
                 start_event = f"data: {json.dumps({'type': 'start', 'timestamp': datetime.now().isoformat()})}\n\n"
                 yield start_event
                 
-                # Extract domain and process chat message using streaming function
-                domain = get_domain_from_request(request)
+                # Process chat message using streaming function
                 async for chunk in call_openai_streaming(req.message, tools, req.session_id, req.user_id, domain):
                     chunk_data = f"data: {json.dumps(chunk)}\n\n"
                     yield chunk_data
@@ -1138,7 +1165,7 @@ async def chat(
         )
 
 @router.get("/sessions/{session_id}/info")
-def get_session_info_endpoint(session_id: str, request: Request, current_user: dict = Depends(get_current_user)):
+async def get_session_info_endpoint(session_id: str, request: Request, current_user: dict = Depends(get_current_user)):
     """Get basic session information including updated title"""
     try:
         # Extract domain from request
@@ -1154,6 +1181,13 @@ def get_session_info_endpoint(session_id: str, request: Request, current_user: d
             )
         
         user_id = response.data[0]["id"]
+        
+        # Validate that the session belongs to the user in the correct domain
+        if not await validate_session_ownership(session_id, user_id, domain):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Session not found or does not belong to you in this domain"
+            )
         
         # Get session info (function handles ownership verification)
         session_info = get_session_info(session_id, domain)
@@ -1218,6 +1252,16 @@ async def get_chat_detail_endpoint(
             )
         
         session_id = session_id.strip()
+        
+        # Extract domain and validate session ownership
+        domain = get_domain_from_request(request)
+        
+        # Validate that the session belongs to the user in the correct domain
+        if not await validate_session_ownership(session_id, user_id, domain):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Session not found or does not belong to you in this domain"
+            )
         
         # Generate cache key
         cache_key = f"chat_detail:{user_id}:{session_id}"

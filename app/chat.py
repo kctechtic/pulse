@@ -8,9 +8,7 @@ from .config import settings
 # Initialize OpenAI client
 client = OpenAI(api_key=settings.openai_api_key)
 
-# Supabase configuration from environment
-SUPABASE_BASE_URL = settings.supabase_edge_function_url
-SUPABASE_API_KEY = settings.supabase_anon_key
+# Supabase configuration is now domain-based and loaded dynamically
 
 # Mapping of tool names to Supabase Edge function endpoints
 SUPABASE_FUNCTIONS = {
@@ -407,7 +405,7 @@ async def handle_openai_streaming_response(stream, session_id: str, messages: li
                     yield {"type": "tool_execution", "content": f"Executing {fn_name}..."}
                     
                     # Call Supabase Edge Function directly with GPT's parameters
-                    result = call_supabase_edge(fn_name, fn_args)
+                    result = call_supabase_edge(fn_name, fn_args, domain)
                     
                     # Add tool result to messages
                     messages.append({
@@ -473,11 +471,26 @@ async def handle_openai_streaming_response(stream, session_id: str, messages: li
 
 
 
-def call_supabase_edge(fn_name: str, args: dict) -> dict:
+def call_supabase_edge(fn_name: str, args: dict, domain: str = None) -> dict:
     """Call Supabase Edge Function with GPT's parameters directly"""
     try:
+        # Get domain-based Supabase configuration
+        from .config import get_supabase_config
+        config = get_supabase_config(domain)
+        
+        # Extract project URL and API key from domain-based config
+        project_url = config["project_url"]
+        api_key = config["api_key"]
+        
+        # Build Edge Function URL from project URL
+        if project_url.endswith('/rest/v1'):
+            edge_function_url = project_url.replace('/rest/v1', '/functions/v1')
+        else:
+            # If project URL doesn't end with /rest/v1, just append /functions/v1
+            edge_function_url = project_url.rstrip('/') + '/functions/v1'
+        
         mapped_name = SUPABASE_FUNCTIONS.get(fn_name, fn_name)
-        url = f"{SUPABASE_BASE_URL}/{mapped_name}"
+        url = f"{edge_function_url}/{mapped_name}"
         
         # Print detailed API call information
         print("=" * 80)
@@ -485,14 +498,17 @@ def call_supabase_edge(fn_name: str, args: dict) -> dict:
         print("=" * 80)
         print(f"📞 Function Name: {fn_name}")
         print(f"🔗 Mapped Endpoint: {mapped_name}")
+        print(f"🌐 Domain: {domain}")
+        print(f"🏗️ Project URL: {project_url}")
+        print(f"🔧 Edge Function URL: {edge_function_url}")
         print(f"🌐 Full URL: {url}")
         print(f"📋 Parameters: {json.dumps(args, indent=2, default=str)}")
         print(f"⏰ Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("-" * 80)
         
         headers = {
-            "Authorization": f"Bearer {SUPABASE_API_KEY}",
-            "apikey": SUPABASE_API_KEY,
+            "Authorization": f"Bearer {api_key}",
+            "apikey": api_key,
             "Content-Type": "application/json",
             "User-Agent": "Pacer-CIL-Chat/1.0"
         }
