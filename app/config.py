@@ -18,6 +18,98 @@ supabase_projects = {
     }
 }
 
+# Host-specific Supabase Functions mapping
+SUPABASE_FUNCTIONS = {
+    "pulse.pacer.studio": {
+        "getOrdersOverTime": "get-orders-over-time",
+        "getOrdersByStatus": "get-orders-by-status",
+        "fetchLatestOkendoReviews": "okendo-review-query",
+        "getReviewsByRatingRange": "get-reviews-by-rating-range",
+        "getReviewsByKeyword": "get-reviews-by-keyword",
+        "getReviewsByDateRange": "get-reviews-by-date-range",
+        "getReviewSummaryByProductName": "get-review-summary-by-product-name",
+        "getSentimentSummary": "get-reviews-by-sentiment",
+        "getOrderDetails": "get-order-details",
+        "getTopProducts": "get-top-products",
+        "getLineItemAggregates": "get-line-item-aggregates",
+        "getDiscountUsage": "get-discount-usage",
+        "getOrdersWithDiscounts": "get-orders-with-discounts",
+        "getCustomers": "get-customers",
+        "getInactiveCustomers": "get-inactive-customers",
+        "getCustomerOrders": "get-customer-orders",
+        "getPostPurchaseInsights": "analyze-post-purchase-feedback",
+        "getCustomersStats": "get-customers-stats",
+        "getTopCustomersRepeatFrequency": "get-top-customers-repeat-frequency",
+        "orchestrator": "orchestrator",
+        # Klaviyo Event Analytics Functions
+        "getEventCounts": "get-event-counts",
+        "getEmailEventRatios": "get-email-click-ratio",
+        "getTopClickedUrls": "get-top-clicked-urls",
+        "getCampaignReasoning": "campaign_reasoning",
+        "getEventLogSlice": "get-event-log-slice"
+    },
+    "thebodyshop.pacer.studio": {
+        "getShopifyMetrics": "agreegation-thebodyshop"
+    }
+}
+
+# Host-specific HTTP Methods mapping
+HTTP_METHODS = {
+    "pulse.pacer.studio": {
+        "getOrdersOverTime": "POST",
+        "getOrdersByStatus": "POST",
+        "fetchLatestOkendoReviews": "GET",
+        "getReviewsByRatingRange": "GET",
+        "getReviewsByKeyword": "GET",
+        "getReviewsByDateRange": "POST",
+        "getReviewSummaryByProductName": "GET",
+        "getSentimentSummary": "POST",
+        "getOrderDetails": "POST",
+        "getTopProducts": "GET",
+        "getLineItemAggregates": "POST",
+        "getDiscountUsage": "POST",
+        "getOrdersWithDiscounts": "GET",
+        "getCustomers": "GET",
+        "getInactiveCustomers": "GET",
+        "getCustomerOrders": "GET",
+        "getPostPurchaseInsights": "POST",
+        "getCustomersStats": "POST",
+        "getTopCustomersRepeatFrequency": "POST",
+        "orchestrator": "POST",
+        # Klaviyo Event Analytics Functions
+        "getEventCounts": "POST",
+        "getEmailEventRatios": "POST",
+        "getTopClickedUrls": "POST",
+        "getCampaignReasoning": "POST",
+        "getEventLogSlice": "POST"
+    },
+    "thebodyshop.pacer.studio": {
+        "getShopifyMetrics": "POST"
+    }
+}
+
+def get_supabase_functions(domain: str = None) -> Dict[str, str]:
+    """
+    Get Supabase functions mapping based on domain.
+    Returns the appropriate function mapping for the given domain.
+    """
+    if not domain:
+        return SUPABASE_FUNCTIONS.get("pulse.pacer.studio", {})
+    
+    clean_domain = domain.split(':')[0]
+    return SUPABASE_FUNCTIONS.get(clean_domain, SUPABASE_FUNCTIONS.get("pulse.pacer.studio", {}))
+
+def get_http_methods(domain: str = None) -> Dict[str, str]:
+    """
+    Get HTTP methods mapping based on domain.
+    Returns the appropriate HTTP methods mapping for the given domain.
+    """
+    if not domain:
+        return HTTP_METHODS.get("pulse.pacer.studio", {})
+    
+    clean_domain = domain.split(':')[0]
+    return HTTP_METHODS.get(clean_domain, HTTP_METHODS.get("pulse.pacer.studio", {}))
+
 def get_supabase_config(domain: str = None) -> Dict[str, str]:
     """
     Get Supabase configuration based on domain.

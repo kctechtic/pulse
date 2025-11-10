@@ -460,7 +460,8 @@ async def create_chat(
             detail="Failed to create session. Please try again."
         )
 
-tools = [
+# Tools for pulse.pacer.studio
+pulse_tools = [
     # Review Management Functions
     {
         "type": "function",
@@ -1056,6 +1057,50 @@ tools = [
     }
 ]
 
+# Tools for thebodyshop.pacer.studio
+thebodyshop_tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "getShopifyMetrics",
+            "description": "Retrieve Shopify store metrics including orders, line items, discounts, fulfillments, and customer-specific queries. Returns numeric metrics only. Supports filtering by customer_id or order_number. Supports natural-language prompts with automatic date detection (defaults to last 7 days).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "Natural language query, e.g., 'total revenue for customer X', 'line items for SKU Y', 'total revenue last week', 'discounts in October', 'number of fulfillments today'. The function will automatically detect date ranges from the prompt."
+                    },
+                    "customer_id": {
+                        "type": "string",
+                        "description": "Optional. Shopify, Klaviyo, or Yotpo customer ID. Metrics will be filtered to this specific customer if provided. Only include if the user explicitly mentions a customer ID or asks for customer-specific metrics."
+                    },
+                    "order_number": {
+                        "type": "string",
+                        "description": "Optional. Shopify order number. Metrics will be filtered to this specific order if provided. Only include if the user explicitly mentions an order number or asks for order-specific metrics."
+                    }
+                },
+                "required": ["prompt"]
+            }
+        }
+    }
+]
+
+def get_domain_specific_tools(domain: str = None):
+    """
+    Get domain-specific tools based on the host.
+    Returns the appropriate tools list for the given domain.
+    """
+    if not domain:
+        return pulse_tools
+    
+    clean_domain = domain.split(':')[0]
+    
+    if clean_domain == "thebodyshop.pacer.studio":
+        return thebodyshop_tools
+    else:
+        return pulse_tools
+
 @router.post("/chat")
 async def chat(
     req: ChatRequest, 
@@ -1115,6 +1160,9 @@ async def chat(
                 detail="Message is too long (max 4000 characters)"
             )
         
+        # Get domain-specific tools
+        domain_tools = get_domain_specific_tools(domain)
+        
         # Create streaming response generator
         async def generate_stream():
             try:
@@ -1122,8 +1170,8 @@ async def chat(
                 start_event = f"data: {json.dumps({'type': 'start', 'timestamp': datetime.now().isoformat()})}\n\n"
                 yield start_event
                 
-                # Process chat message using streaming function
-                async for chunk in call_openai_streaming(req.message, tools, req.session_id, req.user_id, domain):
+                # Process chat message using streaming function with domain-specific tools
+                async for chunk in call_openai_streaming(req.message, domain_tools, req.session_id, req.user_id, domain):
                     chunk_data = f"data: {json.dumps(chunk)}\n\n"
                     yield chunk_data
                     # Force immediate flush for real-time streaming
